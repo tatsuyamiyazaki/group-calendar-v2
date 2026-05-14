@@ -301,11 +301,12 @@ function saveSettings(settings) { PropertiesService.getUserProperties().setPrope
 function loadSettings() {
   const props = PropertiesService.getUserProperties();
   const json = props.getProperty('APP_SETTINGS_V2');
-  let cs = { groups: [], hiddenCalendars: [], useMonoColor: false, dividerLines: [{hour:12,label:'午後'}] };
+  let cs = { groups: [], hiddenCalendars: [], useMonoColor: false, dividerLines: [{hour:12,label:'午後'}], theme: 'system' };
   if (json) try { cs = JSON.parse(json); } catch(e){}
   if (!cs.hiddenCalendars) cs.hiddenCalendars = [];
   if (cs.useMonoColor === undefined) cs.useMonoColor = false;
   if (!cs.dividerLines) cs.dividerLines = [{hour:12,label:'午後'}];
+  if (cs.theme !== 'light' && cs.theme !== 'dark' && cs.theme !== 'system') cs.theme = 'system';
   let realIds = [];
   try { realIds = CalendarApp.getAllCalendars().map(c => c.getId()); } catch(e){}
   let defGrp = (cs.groups||[]).find(g => g.id === 'default_registered');
@@ -317,7 +318,7 @@ function loadSettings() {
   } else { members = realIds; }
   const regGrp = { id: 'default_registered', name: (defGrp && defGrp.name) || '登録カレンダー', members, meetingView: defGrp ? !!defGrp.meetingView : false, isCompactDayView: defGrp ? !!defGrp.isCompactDayView : false };
   const customGrps = (cs.groups||[]).filter(g => g.id !== 'default_registered' && g.id !== 'default');
-  const ns = { groups: [regGrp, ...customGrps], activeGroupId: cs.activeGroupId || 'default_registered', hiddenCalendars: cs.hiddenCalendars, useMonoColor: cs.useMonoColor, dividerLines: cs.dividerLines, headerPadding: cs.headerPadding||0, v1DayLayout: !!cs.v1DayLayout, teamMembers: cs.teamMembers||[] };
+  const ns = { groups: [regGrp, ...customGrps], activeGroupId: cs.activeGroupId || 'default_registered', hiddenCalendars: cs.hiddenCalendars, useMonoColor: cs.useMonoColor, dividerLines: cs.dividerLines, headerPadding: cs.headerPadding||0, v1DayLayout: !!cs.v1DayLayout, teamMembers: cs.teamMembers||[], theme: cs.theme };
   if (!ns.groups.map(g=>g.id).includes(ns.activeGroupId)) ns.activeGroupId = 'default_registered';
   ns.isWorkspaceUser = checkWorkspaceStatus();
   return JSON.stringify(ns);

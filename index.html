@@ -5,6 +5,8 @@
 <meta charset="utf-8">
 <title>Group Calendar</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind.config={darkMode:'class'}</script>
+<script>(function(){try{var t=localStorage.getItem('gc:theme')||'system';if(t!=='light'&&t!=='dark'&&t!=='system')t='system';var d=t==='dark'||(t==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -39,9 +41,62 @@ body{font-family:'Roboto','Noto Sans JP',sans-serif;background:#f9fafb;margin:0}
 .past-header{background-color:rgba(229,231,235,0.5)!important;color:rgba(107,114,128,0.7)!important}
 .personal-panel{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:90vw;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.15);z-index:900;transform:translateX(100%);transition:transform .3s ease;overflow-y:auto}
 .personal-panel.open{transform:translateX(0)}
+/* === Dark mode overrides === */
+.dark body{background:#0f172a;color:#e5e7eb}
+.dark .bg-white{background-color:#1e293b!important}
+.dark .bg-gray-50{background-color:#0f172a!important}
+.dark .bg-gray-100{background-color:#1e293b!important}
+.dark .bg-gray-200{background-color:#334155!important}
+.dark .bg-blue-50{background-color:#1e3a5f!important}
+.dark .bg-blue-50\/50{background-color:rgba(96,165,250,0.14)!important}
+.dark .bg-gray-50\/30,.dark .bg-gray-50\/80{background-color:transparent!important}
+.dark .bg-white\/50,.dark .bg-white\/90{background-color:rgba(30,41,59,0.6)!important}
+.dark .bg-white\/30{background-color:rgba(255,255,255,0.18)!important}
+.dark .bg-blue-100{background-color:#1e3a8a!important}
+.dark .border-b-blue-600{border-color:#60a5fa!important}
+.dark .text-blue-500{color:#60a5fa!important}
+.dark .text-blue-600,.dark .text-blue-700{color:#93c5fd!important}
+.dark .text-blue-800,.dark .text-blue-900{color:#bfdbfe!important}
+.dark .bg-red-50{background-color:#4a1414!important}
+.dark .hover\:bg-gray-50:hover{background-color:#293548!important}
+.dark .hover\:bg-gray-100:hover{background-color:#334155!important}
+.dark .hover\:bg-gray-200:hover{background-color:#475569!important}
+.dark .hover\:bg-blue-50:hover{background-color:#1e3a5f!important}
+.dark .hover\:bg-red-50:hover{background-color:#4a1414!important}
+.dark .hover\:bg-white:hover{background-color:#334155!important}
+.dark .text-gray-900,.dark .text-gray-800,.dark .text-gray-700{color:#e5e7eb!important}
+.dark .text-gray-600,.dark .text-gray-500{color:#94a3b8!important}
+.dark .text-gray-400,.dark .text-gray-300{color:#64748b!important}
+.dark .text-red-500,.dark .text-red-600{color:#f87171!important}
+.dark .border,.dark .border-t,.dark .border-r,.dark .border-b,.dark .border-l{border-color:#334155!important}
+.dark .border-gray-100,.dark .border-gray-200,.dark .border-gray-300{border-color:#334155!important}
+.dark .border-blue-500,.dark .border-l-blue-500{border-color:#3b82f6!important}
+.dark .divide-y>:not([hidden])~:not([hidden]){border-color:#334155!important}
+.dark .ring-1,.dark .ring-2{--tw-ring-color:#334155!important}
+.dark input,.dark select,.dark textarea{background:#1e293b;color:#e5e7eb;border-color:#334155}
+.dark input::placeholder,.dark textarea::placeholder{color:#64748b}
+.dark .shadow,.dark .shadow-sm,.dark .shadow-md,.dark .shadow-lg,.dark .shadow-xl{--tw-shadow-color:rgba(0,0,0,0.5);box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+.dark .custom-scrollbar::-webkit-scrollbar-track{background:#1e293b}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb{background:#475569}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover{background:#64748b}
+.dark .float-tooltip{background:#1e293b;border-color:#334155;color:#e5e7eb;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.dark .past-header{background-color:rgba(30,41,59,0.6)!important;color:rgba(148,163,184,0.7)!important}
+.dark .personal-panel{background:#1e293b;box-shadow:-4px 0 20px rgba(0,0,0,.5)}
+.dark #initial-loader{background:#0f172a}
+.dark .initial-spinner{border-color:#334155;border-top-color:#60a5fa}
+.dark .divider-line::before,.dark .divider-line::after{border-top-color:#475569}
+.dark .divider-label{color:#94a3b8}
+.dark .grid-cell:hover{background-color:rgba(96,165,250,0.08)}
+.dark .drag-over-top,.dark .drag-over-bottom{background:#1e3a5f!important}
+.dark .resizer-bar{background:#475569}
+.dark .resizer-handle:hover,.dark .resizer-handle.resizing{background-color:rgba(96,165,250,.2)}
+.dark .resizer-handle:hover .resizer-bar,.dark .resizer-handle.resizing .resizer-bar{background:#60a5fa}
+.dark .event-text-dark{color:#e5e7eb!important}
+.dark .event-border-dark{border-color:rgba(255,255,255,0.12)!important}
+.dark .event-solid-tile{filter:brightness(0.7) saturate(1.05)}
 </style>
 </head>
-<body class="bg-gray-50 text-gray-800 h-screen overflow-hidden">
+<body class="bg-gray-50 text-gray-800 dark:bg-slate-900 dark:text-slate-100 h-screen overflow-hidden">
 <div id="initial-loader"><div class="initial-spinner"></div><div style="margin-top:1rem;color:#4b5563;font-weight:bold;font-size:.875rem">読み込み中...</div></div>
 <script>
 window.INITIAL_VIEW_MODE = "<?= initialView ?>";
@@ -921,6 +976,7 @@ const SettingsModal=({isOpen,onClose,settings,onSaveSettings,myEmail,initialFocu
   const[localGroups,setLocalGroups]=useState([]);
   const[hiddenCalendars,setHiddenCalendars]=useState([]);
   const[useMonoColor,setUseMonoColor]=useState(false);
+  const[theme,setTheme]=useState('system');
   const[headerPadding,setHeaderPadding]=useState(0);
   const[weekStartDay,setWeekStartDay]=useState(0);
   const[editingGroup,setEditingGroup]=useState(null);
@@ -956,6 +1012,7 @@ const SettingsModal=({isOpen,onClose,settings,onSaveSettings,myEmail,initialFocu
     setLocalGroups(JSON.parse(JSON.stringify(settings.groups||[])));
     setHiddenCalendars([...(settings.hiddenCalendars||[])]);
     setUseMonoColor(!!settings.useMonoColor);
+    setTheme(['light','dark','system'].includes(settings.theme)?settings.theme:'system');
     setHeaderPadding(settings.headerPadding||0);
     setWeekStartDay(settings.weekStartDay||0);
     setTeamMembers([...(settings.teamMembers||[])]);
@@ -997,7 +1054,7 @@ const SettingsModal=({isOpen,onClose,settings,onSaveSettings,myEmail,initialFocu
         finalGroups = [...finalGroups, editingGroup];
       }
     }
-    const newSettings={...settings,groups:finalGroups,hiddenCalendars,useMonoColor,headerPadding,teamMembers,weekStartDay};
+    const newSettings={...settings,groups:finalGroups,hiddenCalendars,useMonoColor,theme,headerPadding,teamMembers,weekStartDay};
     try{
       await new Promise((res,rej)=>google.script.run.withSuccessHandler(res).withFailureHandler(rej).saveSettings(newSettings));
       onSaveSettings(newSettings);
@@ -1224,6 +1281,14 @@ const SettingsModal=({isOpen,onClose,settings,onSaveSettings,myEmail,initialFocu
           {activeTab==='design'&&(
             <div className="space-y-6">
               <h3 className="text-lg font-bold mb-4">デザイン設定</h3>
+              <div className="flex items-center justify-between p-4 border rounded bg-white">
+                <div><div className="font-bold">テーマ</div><div className="text-sm text-gray-500">ライト／ダーク／システム（OS 設定に追従）</div></div>
+                <div className="inline-flex rounded border overflow-hidden text-sm" role="radiogroup" aria-label="テーマ">
+                  {[{v:'light',l:'ライト'},{v:'dark',l:'ダーク'},{v:'system',l:'システム'}].map(o=>(
+                    <button key={o.v} type="button" role="radio" aria-checked={theme===o.v} onClick={()=>setTheme(o.v)} className={`px-3 py-1.5 font-medium border-l first:border-l-0 ${theme===o.v?'bg-blue-600 text-white':'bg-white text-gray-700 hover:bg-gray-50'}`}>{o.l}</button>
+                  ))}
+                </div>
+              </div>
               <div className="flex items-center justify-between p-4 border rounded bg-white">
                 <div><div className="font-bold">単色カレンダーカラー</div><div className="text-sm text-gray-500">イベントごとの色を無視し、カレンダーの色で統一します</div></div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -1541,7 +1606,7 @@ const MeetingView=({currentDate,resources,onEventClick,myEmail,viewMode,isLoadin
               {dayMeetings.map((evt,eIdx)=>{
                 const st=new Date(evt.start),ed=new Date(evt.end);
                 const c = evt.color || '#4285F4';
-                return <div key={evt.id||eIdx} onClick={()=>onEventClick(evt)} className="p-1.5 sm:p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5" style={{borderLeftColor:c,borderLeftWidth:'3px', backgroundColor:c+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
+                return <div key={evt.id||eIdx} onClick={()=>onEventClick(evt)} className="p-1.5 sm:p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5 event-border-dark" style={{borderLeftColor:c,borderLeftWidth:'3px', backgroundColor:c+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
                   {/* Mobile Layout */}
                   <div className="sm:hidden flex flex-col gap-1.5">
                     <div className="flex items-center gap-1.5 overflow-hidden">
@@ -1611,7 +1676,7 @@ const MeetingView=({currentDate,resources,onEventClick,myEmail,viewMode,isLoadin
                  const st=new Date(evt.start);
                  const timeStr=evt.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} `;
                  const c = evt.color || evt.resourceColor || '#4285F4';
-                 return <div key={evt.id||idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 shadow-sm flex items-center gap-1 border-l-4" style={{borderLeftColor:c, backgroundColor:c+'1A', color:'#333'}}>
+                 return <div key={evt.id||idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 shadow-sm flex items-center gap-1 border-l-4 event-text-dark" style={{borderLeftColor:c, backgroundColor:c+'1A', color:'#333'}}>
                    <div className="truncate flex-1 font-bold">{isMobile ? <>{evt.title||'(タイトルなし)'}{timeStr && ` ${timeStr.trim()}`}</> : <>{timeStr}{evt.title||'(タイトルなし)'}</>}</div>
                    <div className="flex -space-x-1 flex-shrink-0 ml-1">
                      {evt.memberParticipants.slice(0,3).map(email=>{
@@ -1753,7 +1818,7 @@ const DayDetailsModal = ({isOpen, date, events, onClose, onEventClick, myEmail, 
              const timeStr = e.isAllDay ? '終日' : `${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} - ${ed.getHours()}:${String(ed.getMinutes()).padStart(2,'0')}`;
              
              if (isMeetingView) {
-               return <div key={idx} onClick={()=>{onEventClick(e)}} className="p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5" style={{borderLeftColor:e.color||e.resourceColor||'#4285F4',borderLeftWidth:'3px', backgroundColor:(e.color||e.resourceColor||'#4285F4')+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
+               return <div key={idx} onClick={()=>{onEventClick(e)}} className="p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5 event-border-dark" style={{borderLeftColor:e.color||e.resourceColor||'#4285F4',borderLeftWidth:'3px', backgroundColor:(e.color||e.resourceColor||'#4285F4')+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
                   <div className="text-xs font-bold text-gray-800 truncate leading-tight">{e.title||'(タイトルなし)'}</div>
                   <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
                     <div className="flex items-center -space-x-1">
@@ -1845,7 +1910,7 @@ const MonthView=({currentDate,resources,onEventClick,myEmail,groupId})=>{
                const st=new Date(e.start);
                const timeStr=e.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} `;
                const isFacility = e.resourceEmail && (e.resourceEmail.includes('resource.calendar.google.com') || e.resourceEmail.includes('group.calendar.google.com'));
-               return <div key={idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(e)}} className="text-[10px] p-1 rounded truncate cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center justify-between" style={{backgroundColor:e.resourceColor||'#4285F4'}}>
+               return <div key={idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(e)}} className="text-[10px] p-1 rounded truncate cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center justify-between event-solid-tile" style={{backgroundColor:e.resourceColor||'#4285F4'}}>
                  <div className="truncate flex-1">{isMobile ? <>{e.title||'(タイトルなし)'}{timeStr && ` ${timeStr.trim()}`}</> : <>{timeStr}{e.title||'(タイトルなし)'}</>}</div>
                  {e.resourcePhotoUrl ? <img src={e.resourcePhotoUrl} className="w-3 h-3 rounded-full ml-1 flex-shrink-0 object-cover"/> : 
                  <div className="w-3 h-3 rounded-full bg-white/30 flex items-center justify-center text-[7px] font-bold ml-1 flex-shrink-0">
@@ -2121,7 +2186,7 @@ const SchedulerGrid=({viewMode,currentDate,resources,onEventClick,onCellClick,my
                        const st=new Date(evt.start);
                        const timeStr=evt.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')}`;
                        const isFacility = evt.resourceEmail && (evt.resourceEmail.includes('resource.calendar.google.com') || evt.resourceEmail.includes('group.calendar.google.com'));
-                       return <div key={evt.id+'_'+eIdx} onClick={(e)=>{e.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center gap-1 border border-black/10 overflow-hidden flex-shrink-0" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4'}} title={evt.title}>
+                       return <div key={evt.id+'_'+eIdx} onClick={(e)=>{e.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center gap-1 border border-black/10 overflow-hidden flex-shrink-0 event-solid-tile" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4'}} title={evt.title}>
                          {timeStr&&<div className="opacity-90 font-bold flex-shrink-0">{timeStr}</div>}
                          <div className="font-bold truncate leading-tight flex-1">{evt.title||'予定あり'}</div>
                          {evt.resourcePhotoUrl ? <img src={evt.resourcePhotoUrl} className="w-3 h-3 rounded-full ml-1 flex-shrink-0 object-cover"/> : 
@@ -2276,7 +2341,7 @@ const SchedulerGrid=({viewMode,currentDate,resources,onEventClick,onCellClick,my
                   const h = isOverlap ? 18 : (defaultRowHeight-4);
                   const timeStr = `${s.getHours()}:${String(s.getMinutes()).padStart(2,'0')} - ${e.getHours()}:${String(e.getMinutes()).padStart(2,'0')}`;
 
-                  return <div key={evt.id+'_'+eIdx} className={`absolute rounded-sm px-1 overflow-hidden cursor-pointer hover:opacity-90 shadow-sm border-[1.5px] border-white/90 flex ${isOverlap ? 'flex-row items-center gap-1' : 'flex-col justify-start pt-0.5'}`} style={{top:rowOffsets[rIdx]+topOffset,height:h,left:`calc(${left/totalCols}%)`,width:`calc(${width/totalCols}% - 2px)`,backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4',color:'#fff',zIndex:isOverlap?21:20}} onClick={()=>onEventClick(evt)} onMouseEnter={ev=>{setHoverEvent(evt);setTtPos({x:ev.clientX,y:ev.clientY})}} onMouseLeave={()=>setHoverEvent(null)}>
+                  return <div key={evt.id+'_'+eIdx} className={`absolute rounded-sm px-1 overflow-hidden cursor-pointer hover:opacity-90 shadow-sm border-[1.5px] border-white/90 flex event-solid-tile ${isOverlap ? 'flex-row items-center gap-1' : 'flex-col justify-start pt-0.5'}`} style={{top:rowOffsets[rIdx]+topOffset,height:h,left:`calc(${left/totalCols}%)`,width:`calc(${width/totalCols}% - 2px)`,backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4',color:'#fff',zIndex:isOverlap?21:20}} onClick={()=>onEventClick(evt)} onMouseEnter={ev=>{setHoverEvent(evt);setTtPos({x:ev.clientX,y:ev.clientY})}} onMouseLeave={()=>setHoverEvent(null)}>
                     <div className={`truncate ${isOverlap?'text-[9px] font-medium flex-shrink-0 max-w-full':'text-[10px] font-bold leading-none w-full'}`}>{evt.title||'予定あり'}</div>
                     <div className={`truncate opacity-90 ${isOverlap?'text-[8px] min-w-0':'text-[8px] leading-none mt-[2px] w-full'}`}>{timeStr}</div>
                   </div>
@@ -2566,6 +2631,17 @@ const App=()=>{
     const l=document.getElementById('initial-loader');const r=document.getElementById('root');if(l){l.style.opacity='0';setTimeout(()=>{l.remove();if(r)r.style.opacity='1'},300)}
   },[]);
 
+  // テーマ適用: <html> クラス制御 + localStorage 同期 + system モードの OS 追従
+  useEffect(()=>{
+    if(!settings)return;
+    const t=['light','dark','system'].includes(settings.theme)?settings.theme:'system';
+    const mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+    const apply=()=>{const d=t==='dark'||(t==='system'&&mq&&mq.matches);document.documentElement.classList.toggle('dark',d);document.documentElement.setAttribute('data-theme',t)};
+    apply();
+    try{localStorage.setItem('gc:theme',t)}catch(e){}
+    if(t==='system'&&mq){const h=()=>apply();mq.addEventListener?mq.addEventListener('change',h):mq.addListener(h);return()=>{mq.removeEventListener?mq.removeEventListener('change',h):mq.removeListener(h)}}
+  },[settings?.theme]);
+
   useEffect(()=>{if(settings)fetchData(false)},[currentDate,viewMode,settings]); // forceFetch無しならキャッシュを使って即時描画
 
   // コンテキストメニューを閉じる処理
@@ -2668,6 +2744,7 @@ const App=()=>{
             <button onClick={()=>setCurrentDate(d=>{const nd=new Date(d);if(viewMode==='week')nd.setDate(nd.getDate()+7);else if(viewMode==='month')nd.setMonth(nd.getMonth()+1);else nd.setDate(nd.getDate()+1);return nd})} className="p-1 md:p-2 hover:bg-gray-100 rounded-full"><Icon name="chevron-right" size={18}/></button>
           </div>
           <button onClick={()=>setIsPersonalOpen(!isPersonalOpen)} className={`hidden md:flex p-2 rounded-full flex-shrink-0 transition-colors mr-1 ${isPersonalOpen?'bg-blue-100 text-blue-600':'text-gray-500 hover:bg-gray-100'}`} title="マイ予定"><Icon name="user"/></button>
+          {(()=>{const cur=settings?.theme||'system';const isSys=cur==='system';const isDark=cur==='dark'||(isSys&&(typeof window!=='undefined'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches));return <button onClick={()=>{if(!settings)return;const next=(cur==='dark'||(isSys&&isDark))?'light':'dark';const ns={...settings,theme:next};setSettings(ns);google.script.run.saveSettings(ns)}} className="hidden md:flex relative p-2 text-gray-500 hover:bg-gray-100 rounded-full flex-shrink-0" title={`テーマ: ${cur==='light'?'ライト':cur==='dark'?'ダーク':'システム'} (クリックで切替)`}><Icon name={isDark?'sun':'moon'} size={20}/>{isSys&&<span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500 border border-white dark:border-slate-800" title="システムモード"></span>}</button>})()}
           <button onClick={()=>{setSettingsFocus(null);setIsSettingsOpen(true)}} className="hidden md:flex p-2 text-gray-500 hover:bg-gray-100 rounded-full flex-shrink-0"><Icon name="settings"/></button>
           
           {/* モバイル用ハンバーガーメニュー */}
