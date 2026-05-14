@@ -1,0 +1,2807 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<title>Group Calendar</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+body{font-family:'Roboto','Noto Sans JP',sans-serif;background:#f9fafb;margin:0}
+.font-roboto{font-family:'Roboto',sans-serif}
+.scrollbar-hide::-webkit-scrollbar{display:none}.scrollbar-hide{-ms-overflow-style:none;scrollbar-width:none}
+.grid-cell:hover{background-color:rgba(59,130,246,0.05)}
+.custom-scrollbar::-webkit-scrollbar{width:8px;height:8px}
+.custom-scrollbar::-webkit-scrollbar-track{background:#f1f1f1}
+.custom-scrollbar::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover{background:#aaa}
+.float-tooltip{position:fixed;z-index:9999;background:#fff;border:1px solid #e5e7eb;box-shadow:0 4px 6px -1px rgba(0,0,0,.1);border-radius:8px;padding:12px;pointer-events:none;min-width:220px;max-width:300px;font-size:.875rem;line-height:1.25rem}
+.resizer-handle{position:absolute;top:0;right:-4px;bottom:0;width:10px;cursor:col-resize;z-index:60;display:flex;align-items:center;justify-content:center;transition:background-color .2s}
+.resizer-handle:hover,.resizer-handle.resizing{background-color:rgba(59,130,246,.2)}
+.resizer-bar{width:4px;height:24px;background:#d1d5db;border-radius:2px;transition:all .2s}
+.resizer-handle:hover .resizer-bar,.resizer-handle.resizing .resizer-bar{background:#3b82f6;height:100%}
+.draggable-item{cursor:grab;transition:all .2s}.draggable-item:active{cursor:grabbing}
+.drag-over-top{border-top:2px solid #2563eb!important;background:#eff6ff}
+.drag-over-bottom{border-bottom:2px solid #2563eb!important;background:#eff6ff}
+.divider-line{position:absolute;left:0;right:0;z-index:15;pointer-events:none;display:flex;align-items:center}
+.divider-line::before,.divider-line::after{content:'';flex:1;border-top:1px dashed #94a3b8}
+.divider-label{padding:0 6px;font-size:9px;color:#64748b;white-space:nowrap;font-weight:500}
+#root{opacity:0;transition:opacity .3s ease-in}
+#initial-loader{position:fixed;inset:0;z-index:10000;background:#f9fafb;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .3s ease-out}
+.initial-spinner{width:48px;height:48px;border:4px solid #e5e7eb;border-top-color:#2563eb;border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.past-header{background-color:rgba(229,231,235,0.5)!important;color:rgba(107,114,128,0.7)!important}
+.personal-panel{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:90vw;background:#fff;box-shadow:-4px 0 20px rgba(0,0,0,.15);z-index:900;transform:translateX(100%);transition:transform .3s ease;overflow-y:auto}
+.personal-panel.open{transform:translateX(0)}
+</style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen overflow-hidden">
+<div id="initial-loader"><div class="initial-spinner"></div><div style="margin-top:1rem;color:#4b5563;font-weight:bold;font-size:.875rem">読み込み中...</div></div>
+<script>
+window.INITIAL_VIEW_MODE = "<?= initialView ?>";
+window.INITIAL_GROUP_ID = "<?= initialGroupId ?>";
+window.addEventListener('error', function(event) {
+  var loader = document.getElementById('initial-loader');
+  if(loader) {
+    loader.innerHTML = '<div style="margin-top:1rem;color:red;font-weight:bold;font-size:.875rem;max-width:80%;word-break:break-all;">システムエラーが発生しました:<br/>' + event.message + '</div>';
+  }
+});
+</script>
+<div id="root" class="h-full"></div>
+<div id="portal-root"></div>
+
+<script type="text/babel">
+/* ===== V2 アプリケーション バージョン ===== */
+const APP_VERSION = "v2.0.0";
+
+/* ===== PLACEHOLDER: React app will be added in next steps ===== */
+const {useState,useEffect,useMemo,useRef,useCallback,useLayoutEffect,Component} = React;
+const {createPortal} = ReactDOM;
+
+const LS_KEYS = {SETTINGS:'GS_APP_SETTINGS_V2',RESOURCES:'GS_APP_RESOURCES_V2',VIEW_STATE:'GS_APP_VIEW_STATE_V2',FETCH_TIMES:'GS_APP_FETCH_TIMES_V2'};
+
+/* ===== IndexedDB Key-Value Store ===== */
+const idbKV = {
+  db: null,
+  init: function() {
+    return new Promise((resolve, reject) => {
+      if (this.db) return resolve(this.db);
+      const req = indexedDB.open('GroupCalendarDB', 1);
+      req.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('keyval')) db.createObjectStore('keyval');
+        if (!db.objectStoreNames.contains('resources')) db.createObjectStore('resources');
+      };
+      req.onsuccess = e => { this.db = e.target.result; resolve(this.db); };
+      req.onerror = e => reject(e);
+    });
+  },
+  get: async function(key, storeName='keyval') {
+    const db = await this.init();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readonly');
+      const store = tx.objectStore(storeName);
+      const req = store.get(key);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  },
+  set: async function(key, val, storeName='keyval') {
+    const db = await this.init();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      const req = store.put(val, key);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  },
+  clear: async function() {
+    const db = await this.init();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['keyval', 'resources'], 'readwrite');
+      tx.objectStore('keyval').clear();
+      tx.objectStore('resources').clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+};
+
+/* ===== IndexedDB Custom Hook ===== */
+function useIndexedDBState(key, initialValue) {
+  const [state, setState] = useState(initialValue);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  useEffect(() => {
+    idbKV.get(key).then(val => {
+      if (val !== undefined) setState(val);
+      setIsInitialized(true);
+    }).catch(e => {
+      console.warn('IDB get failed', e);
+      setIsInitialized(true);
+    });
+  }, [key]);
+
+  const setItem = useCallback((value) => {
+    const valueToStore = value instanceof Function ? value(state) : value;
+    setState(valueToStore);
+    if (isInitialized) {
+      idbKV.set(key, valueToStore).catch(e => console.warn('IDB set failed', e));
+    }
+  }, [key, state, isInitialized]);
+
+  return [state, setItem, isInitialized];
+}
+/* === ErrorBoundary === */
+class ErrorBoundary extends Component {
+  constructor(p){super(p);this.state={hasError:false}}
+  static getDerivedStateFromError(){return{hasError:true}}
+  componentDidCatch(e,i){console.error("[ErrorBoundary]",e,i)}
+  render(){return this.state.hasError?null:this.props.children}
+}
+
+/* === Utility Functions === */
+const stripHtmlTags=(s)=>{if(!s)return '';let t=s.replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>/gi,'\n');return t.replace(/<[^>]*>/g,'')};
+
+/* === Icon Component === */
+const Icon=React.memo(({name,size=16,className,onClick,...props})=>{
+  const ref=useRef(null);
+  useEffect(()=>{const el=ref.current;if(el&&name){el.innerHTML='';const i=document.createElement('i');i.setAttribute('data-lucide',name);i.setAttribute('width',size);i.setAttribute('height',size);if(className)i.setAttribute('class',className);el.appendChild(i);lucide.createIcons({root:el,nameAttr:'data-lucide',attrs:{width:size,height:size,class:className}})}},[name,size,className]);
+  return <span ref={ref} onClick={onClick} style={{display:'inline-flex',lineHeight:0,cursor:onClick?'pointer':'inherit',...props.style}} {...props}/>
+});
+
+/* === ModalPortal === */
+const ModalPortal=({children})=>{const p=document.getElementById('portal-root');return p?createPortal(children,p):null};
+
+/* === Digital Clock === */
+const DigitalClock=()=>{
+  const[now,setNow]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>{setNow(new Date())},1000);return()=>clearInterval(t)},[]);
+  const h=String(now.getHours()).padStart(2,'0'),m=String(now.getMinutes()).padStart(2,'0');
+  return <div className="flex items-center text-gray-600 text-xl font-bold ml-4 select-none tracking-wide font-roboto"><span>{h}</span><span className="mx-0.5">:</span><span>{m}</span></div>
+};
+
+/* === Custom Alert/Confirm Modal (alert/confirm置換) === */
+const AlertContext=React.createContext(null);
+const AlertProvider=({children})=>{
+  const[state,setState]=useState(null);
+  const showAlert=useCallback((msg)=>new Promise(res=>{setState({type:'alert',msg,resolve:res})}),[]);
+  const showConfirm=useCallback((msg)=>new Promise(res=>{setState({type:'confirm',msg,resolve:res})}),[]);
+  const showPrompt=useCallback((msg,defaultText='',isReadonly=false)=>new Promise(res=>{setState({type:'prompt',msg,defaultText,isReadonly,resolve:res})}),[]);
+  const close=(val)=>{if(state)state.resolve(val);setState(null)};
+  return <AlertContext.Provider value={{showAlert,showConfirm,showPrompt}}>
+    {children}
+    {state&&<ModalPortal><div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4" onClick={()=>close(state.type==='alert'||state.type==='prompt'?undefined:false)}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-sm" onClick={e=>e.stopPropagation()}>
+        <div className="p-6">
+          <p className="text-gray-800 whitespace-pre-wrap">{state.msg}</p>
+          {state.type==='prompt'&&<div className="mt-3">
+            <input type="text" readOnly={state.isReadonly} defaultValue={state.defaultText} className="w-full border rounded p-2 text-sm bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500" onClick={e=>e.target.select()}/>
+          </div>}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex justify-end gap-2 rounded-b-lg">
+          {(state.type==='confirm'||state.type==='prompt')&&<button onClick={()=>close(state.type==='prompt'?undefined:false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded">閉じる</button>}
+          {state.type!=='prompt'&&<button onClick={()=>close(state.type==='alert'?undefined:true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">OK</button>}
+        </div>
+      </div>
+    </div></ModalPortal>}
+  </AlertContext.Provider>
+};
+const useAlert=()=>React.useContext(AlertContext);
+
+/* === VISIBILITY_CONFIG (色補正) === */
+const VISIBILITY_CONFIG={maxLightness:0.55,maxSaturation:0.80};
+const adjustColorHsl=(hex)=>{
+  if(!hex)return'#4285F4';hex=hex.replace(/^#/,'');if(hex.length===3)hex=hex.replace(/(.)/g,'$1$1');
+  let r=parseInt(hex.substring(0,2),16)/255,g=parseInt(hex.substring(2,4),16)/255,b=parseInt(hex.substring(4,6),16)/255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b);let h,s,l=(max+min)/2;
+  if(max===min){h=s=0}else{const d=max-min;s=l>.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break}h/=6}
+  if(l>VISIBILITY_CONFIG.maxLightness)l=VISIBILITY_CONFIG.maxLightness;if(s>VISIBILITY_CONFIG.maxSaturation)s=VISIBILITY_CONFIG.maxSaturation;
+  let r1,g1,b1;if(s===0){r1=g1=b1=l}else{const hue2rgb=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r1=hue2rgb(p,q,h+1/3);g1=hue2rgb(p,q,h);b1=hue2rgb(p,q,h-1/3)}
+  const toHex=c=>{const v=Math.round(c*255).toString(16);return v.length===1?'0'+v:v};
+  return'#'+toHex(r1)+toHex(g1)+toHex(b1)
+};
+
+/* === DatePickerModal === */
+const DatePickerModal=({isOpen,onClose,currentDate,onSelectDate})=>{
+  if(!isOpen)return null;
+  const[vd,setVd]=useState(new Date(currentDate));const y=vd.getFullYear(),mo=vd.getMonth();
+  const fd=new Date(y,mo,1).getDay(),dim=new Date(y,mo+1,0).getDate();
+  const days=[];for(let i=0;i<fd;i++)days.push(null);for(let i=1;i<=dim;i++)days.push(i);
+  return <ModalPortal><div className="fixed inset-0 bg-black/20 z-[1000] flex items-center justify-center p-4" onClick={onClose}>
+    <div className="bg-white rounded-lg shadow-xl p-4 w-72" onClick={e=>e.stopPropagation()}>
+      <div className="flex justify-between items-center mb-4">
+        <button onClick={()=>setVd(new Date(y,mo-1,1))} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-left" size={20}/></button>
+        <span className="font-bold text-lg">{y}年 {mo+1}月</span>
+        <button onClick={()=>setVd(new Date(y,mo+1,1))} className="p-1 hover:bg-gray-100 rounded"><Icon name="chevron-right" size={20}/></button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center text-sm mb-2 font-bold text-gray-500">
+        <div className="text-red-500">日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div className="text-blue-500">土</div>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center">{days.map((d,i)=><div key={i} className="h-8 flex items-center justify-center">
+        {d&&<button onClick={()=>{onSelectDate(new Date(y,mo,d));onClose()}} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${d===currentDate.getDate()&&mo===currentDate.getMonth()&&y===currentDate.getFullYear()?'bg-blue-600 text-white font-bold':'hover:bg-blue-50 text-gray-700'}`}>{d}</button>}
+      </div>)}</div>
+      <div className="mt-4 text-center"><button onClick={()=>{onSelectDate(new Date());onClose()}} className="text-sm text-blue-600 font-medium hover:underline">今日へ移動</button></div>
+    </div>
+  </div></ModalPortal>
+};
+
+/* === HoverTooltip (Viewport境界対応版) === */
+const HoverTooltip=({event,position})=>{
+  if(!event||!position||window.innerWidth<768)return null;
+  const pr=document.getElementById('portal-root');if(!pr)return null;
+  const vw=window.innerWidth,vh=window.innerHeight;
+  const style={};
+  // 右端チェック
+  if(position.x+320>vw){style.right=(vw-position.x+10)+'px'}else{style.left=(position.x+10)+'px'}
+  // 下端チェック
+  if(position.y>vh*0.7){style.bottom=(vh-position.y+10)+'px'}else{style.top=(position.y+10)+'px'}
+  const start=new Date(event.start),end=new Date(event.end);
+  const isPrivate=event.visibility==='private'||event.visibility==='confidential'||!event.title;
+  const dt=isPrivate?'予定あり':event.title,dd=isPrivate?'非公開':stripHtmlTags(event.description),dl=isPrivate?'':event.location;
+  const all=[...(event.creators||[]),...(event.guests||[])];
+  const uniq=Array.from(new Map(all.map(p=>[p.email,p])).values());
+  return createPortal(<div className="float-tooltip text-gray-700" style={style}>
+    <div className="font-bold mb-1 text-gray-900 break-words">{dt}</div>
+    <div className="text-xs text-gray-500 mb-1">{start.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - {end.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+    {dl&&<div className="flex items-center gap-1 text-xs text-gray-500 mb-1"><Icon name="map-pin" size={12}/> {dl}</div>}
+    {!isPrivate&&uniq.length>0&&<div className="mt-2 pt-2 border-t border-gray-100">
+      <div className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1"><Icon name="users" size={12}/> 参加者 ({uniq.length})</div>
+      <div className="text-xs text-gray-500 pl-4 space-y-0.5">{uniq.slice(0,3).map((p,i)=><div key={i} className="truncate flex items-center gap-1">{p.type==='creator'&&<Icon name="crown" size={10} className="text-yellow-500"/>}{p.name||p.email}</div>)}
+      {uniq.length>3&&<div className="text-gray-400">+ 他 {uniq.length-3} 名</div>}</div>
+    </div>}
+    {dd&&<div className="text-xs text-gray-600 mt-2 border-t pt-1 line-clamp-3 whitespace-pre-wrap">{dd}</div>}
+  </div>,pr)
+};
+
+/* === EventDetailModal (Googleカレンダーリンク付き) === */
+const EventDetailModal=({event,onClose,myEmail,onEdit,onDelete})=>{
+  const{showConfirm}=useAlert()||{};
+  const[resolvedNames,setResolvedNames]=useState({});
+
+  useEffect(()=>{
+    if(!event)return;
+    const all=[...(event.creators||[]),...(event.guests||[])];
+    const emailsToResolve = all.filter(p=>!p.name || p.name===p.email || p.name.includes('@')).map(p=>p.email);
+    const uniqueEmails = [...new Set(emailsToResolve)];
+    uniqueEmails.forEach(email=>{
+      google.script.run.withSuccessHandler(res=>{
+        if(res && res.name && !res.name.includes('@')) {
+          setResolvedNames(prev=>({...prev, [email]:res.name}));
+        }
+      }).resolvePersonInfo(email, email, false);
+    });
+  },[event]);
+
+  if(!event)return null;
+  const start=new Date(event.start),end=new Date(event.end);
+  const isOwner=event.creators&&event.creators.some(c=>c.email===myEmail);
+  const isPrivate=event.visibility==='private'||event.visibility==='confidential'||!event.title;
+  const dt=isPrivate?'予定あり':event.title,dd=isPrivate?'非公開':stripHtmlTags(event.description),dl=isPrivate?'':event.location;
+  const all=[...(event.creators||[]),...(event.guests||[])];
+  const uniq=Array.from(new Map(all.map(p=>[p.email,p])).values());
+  const statusMap={YES:{label:'参加',color:'text-green-600 bg-green-50'},NO:{label:'不参加',color:'text-red-600 bg-red-50'},MAYBE:{label:'未定',color:'text-orange-600 bg-orange-50'},INVITED:{label:'招待済',color:'text-gray-600 bg-gray-50'},OWNER:{label:'主催者',color:'text-blue-600 bg-blue-50'}};
+  return <ModalPortal><div className="fixed inset-0 bg-black/50 z-[2100] flex items-center justify-center p-4" onClick={onClose}>
+    <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={e=>e.stopPropagation()}>
+      <div className="h-3" style={{backgroundColor:event.color}}></div>
+      <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
+        <div className="flex justify-between items-start mb-4 gap-2">
+          <h2 className="text-xl font-bold text-gray-800 leading-tight select-text flex-1 min-w-0 break-words">{dt}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100 flex-shrink-0"><Icon name="x" size={24}/></button>
+        </div>
+        <div className="space-y-5">
+          <div className="flex items-start gap-4"><div className="mt-1 text-gray-400 flex-shrink-0"><Icon name="clock" size={20}/></div><div className="flex-1 min-w-0">
+            <div className="font-medium text-lg break-words">{start.toLocaleDateString('ja-JP',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+            <div className="text-gray-600 break-words">{event.isAllDay?'終日':`${start.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} - ${end.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`}</div>
+          </div></div>
+          {dl&&<div className="flex items-start gap-4"><div className="mt-1 text-gray-400 flex-shrink-0"><Icon name="map-pin" size={20}/></div><div className="select-text text-gray-700 flex-1 min-w-0 break-words">{dl}</div></div>}
+          {dd&&<div className="flex items-start gap-4"><div className="mt-1 text-gray-400 flex-shrink-0"><Icon name="align-left" size={20}/></div><div className="text-sm whitespace-pre-wrap select-text bg-gray-50 p-3 rounded border flex-1 min-w-0 overflow-x-auto break-words">{dd}</div></div>}
+          {!isPrivate&&uniq.length>0&&<div className="flex items-start gap-4"><div className="mt-1 text-gray-400 flex-shrink-0"><Icon name="users" size={20}/></div><div className="flex-1 min-w-0">
+            <h4 className="text-sm font-semibold text-gray-500 mb-2">参加者 ({uniq.length}名)</h4>
+            <div className="space-y-1">{uniq.map((p,idx)=>{
+              let ss={label:'ゲスト',color:'text-gray-500'};if(p.type==='creator')ss=statusMap.OWNER;else if(p.status&&statusMap[p.status])ss=statusMap[p.status];
+              return <div key={idx} className="flex justify-between items-center text-sm p-1 hover:bg-gray-50 rounded">
+                <span className="flex-1 min-w-0 truncate flex items-center gap-1 mr-2" title={p.email}>{p.type==='creator'&&<Icon name="crown" size={12} className="text-yellow-500 flex-shrink-0"/>}<span className="truncate">{resolvedNames[p.email]||p.name||p.email}</span></span>
+                <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${ss.color}`}>{ss.label}</span>
+              </div>
+            })}</div>
+          </div></div>}
+        </div>
+      </div>
+      <div className="p-4 border-t bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+        <div>{event.htmlLink&&<a href={event.htmlLink} target="_blank" className="px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 border border-blue-200 rounded flex items-center gap-2 inline-flex whitespace-nowrap"><Icon name="external-link" size={16}/><span className="hidden sm:inline">Googleカレンダーで表示</span><span className="sm:hidden">開く</span></a>}</div>
+        {isOwner&&<div className="flex gap-2">
+          <button onClick={()=>onEdit(event)} className="px-4 py-2 text-sm font-bold text-gray-700 bg-white border rounded hover:bg-gray-50 shadow-sm whitespace-nowrap">編集</button>
+          <button onClick={()=>onDelete(event)} className="px-4 py-2 text-sm font-bold text-white bg-red-600 rounded hover:bg-red-700 shadow-sm whitespace-nowrap">削除</button>
+        </div>}
+      </div>
+    </div>
+  </div></ModalPortal>
+};
+
+/* === CreateEventModal (メンバー選択UI付き) === */
+const CreateEventModal=({isOpen,onClose,defaultStart,defaultCalendarId,initialGuest,editingEvent,onSave,groupMembers,resources,isWorkspaceUser})=>{
+  const[title,setTitle]=useState('');const[startTime,setStartTime]=useState('');const[endTime,setEndTime]=useState('');
+  const[date,setDate]=useState('');const[description,setDescription]=useState('');const[location,setLocation]=useState('');
+  const[guests,setGuests]=useState('');const[isSaving,setIsSaving]=useState(false);
+  const[showMembers,setShowMembers]=useState(false);const[selectedMembers,setSelectedMembers]=useState([]);
+  const[dirSearchQuery,setDirSearchQuery]=useState('');const[dirSearchResults,setDirSearchResults]=useState([]);const[isSearchingDir,setIsSearchingDir]=useState(false);
+  const[overlapWarning,setOverlapWarning]=useState([]);
+
+  useEffect(()=>{if(isOpen){
+    if(editingEvent){const s=new Date(editingEvent.start),en=new Date(editingEvent.end);setTitle(editingEvent.title||'');setDescription(stripHtmlTags(editingEvent.description)||'');setLocation(editingEvent.location||'');setDate(s.toISOString().split('T')[0]);setStartTime(s.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}));setEndTime(en.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}));setGuests('');setSelectedMembers([])}
+    else if(defaultStart){const d=new Date(defaultStart);setDate(d.toISOString().split('T')[0]);setStartTime(d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}));const en=new Date(d);en.setMinutes(en.getMinutes()+30);setEndTime(en.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}));setTitle('');setDescription('');setLocation('');setGuests(initialGuest&&initialGuest!==defaultCalendarId?initialGuest:'');setSelectedMembers(initialGuest&&initialGuest!==defaultCalendarId?[initialGuest]:[])}
+    setShowMembers(false);setDirSearchQuery('');setDirSearchResults([]);setOverlapWarning([]);
+  }},[isOpen,defaultStart,initialGuest,defaultCalendarId,editingEvent]);
+  const toggleMember=(email)=>{setSelectedMembers(prev=>prev.includes(email)?prev.filter(e=>e!==email):[...prev,email])};
+  const handleSubmit=()=>{
+    if(!title||!date||!startTime||!endTime)return;setIsSaving(true);
+    const allGuests=[guests,...selectedMembers].filter(e=>e).join(',');
+    const eventData={title,start:new Date(`${date}T${startTime}`).toISOString(),end:new Date(`${date}T${endTime}`).toISOString(),description,location,guests:allGuests,isAllDay:false};
+    const handler=google.script.run.withSuccessHandler(()=>{setIsSaving(false);onSave(editingEvent?{...eventData,id:editingEvent.id}:eventData,editingEvent?'update':'create');onClose()}).withFailureHandler(err=>{setIsSaving(false)});
+    if(editingEvent)handler.updateEvent(defaultCalendarId,editingEvent.originalId||editingEvent.id,eventData);
+    else handler.createEvent(defaultCalendarId,eventData)
+  };
+
+  useEffect(()=>{
+    if(dirSearchQuery.trim()){
+      setIsSearchingDir(true);
+      const t=setTimeout(()=>google.script.run.withSuccessHandler(d=>{setDirSearchResults(JSON.parse(d));setIsSearchingDir(false)}).searchDirectoryUsers(dirSearchQuery),500);
+      return ()=>clearTimeout(t);
+    }else{setDirSearchResults([]);setIsSearchingDir(false)}
+  },[dirSearchQuery]);
+
+  useEffect(()=>{
+    if(isOpen&&date&&startTime&&endTime&&selectedMembers.length>0){
+      const s=new Date(`${date}T${startTime}`),e=new Date(`${date}T${endTime}`),warns=[];
+      selectedMembers.forEach(mem=>{
+        const r=resources.find(rx=>rx.email===mem||rx.id===mem);
+        if(r&&r.events){
+          const hasConflict=r.events.some(evt=>{
+            if(evt.id===editingEvent?.id)return false;
+            const evS=new Date(evt.start),evE=new Date(evt.end);
+            if(evt.isAllDay)return s.toDateString()===evS.toDateString();
+            return s<evE&&e>evS;
+          });
+          if(hasConflict)warns.push(r.name||mem);
+        }
+      });
+      setOverlapWarning(warns);
+    }else{setOverlapWarning([])}
+  },[date,startTime,endTime,selectedMembers,resources,isOpen,editingEvent]);
+  if(!isOpen)return null;
+  const availableMembers=(groupMembers||[]).filter(m=>m.email!==defaultCalendarId);
+  return <ModalPortal><div className="fixed inset-0 bg-black/50 z-[1000] flex items-center justify-center p-4">
+    <div className="bg-white rounded-lg shadow-xl w-full max-w-md flex flex-col max-h-[90vh]">
+      <div className="p-4 border-b flex justify-between items-center bg-blue-50">
+        <h2 className="text-lg font-bold text-blue-800 flex items-center gap-2"><Icon name={editingEvent?"edit":"calendar-plus"} size={20}/>{editingEvent?"予定の編集":"予定の作成"}</h2>
+        <button onClick={onClose}><Icon name="x" size={20}/></button>
+      </div>
+      <div className="p-5 space-y-4 overflow-y-auto flex-1">
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">タイトル</label><input type="text" className="w-full border rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="予定のタイトル" value={title} onChange={e=>setTitle(e.target.value)} autoFocus/></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className="block text-sm font-medium text-gray-700 mb-1">日付</label><input type="date" className="w-full border rounded p-2" value={date} onChange={e=>setDate(e.target.value)}/></div>
+          <div className="flex gap-2"><div className="flex-1"><label className="block text-sm font-medium text-gray-700 mb-1">開始</label><input type="time" className="w-full border rounded p-2" value={startTime} onChange={e=>setStartTime(e.target.value)}/></div>
+          <div className="flex-1"><label className="block text-sm font-medium text-gray-700 mb-1">終了</label><input type="time" className="w-full border rounded p-2" value={endTime} onChange={e=>setEndTime(e.target.value)}/></div></div>
+        </div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">ゲスト (カンマ区切り)</label><input type="text" className="w-full border rounded p-2" placeholder="guest@example.com" value={guests} onChange={e=>setGuests(e.target.value)}/></div>
+        
+        <div className="mt-2">
+          <label className="block text-sm font-medium text-gray-700 mb-1">ユーザー・施設を検索して追加</label>
+          <div className="relative">
+             <input type="text" className="w-full border rounded p-2 text-sm" placeholder="名前やメールアドレスで検索..." value={dirSearchQuery} onChange={e=>setDirSearchQuery(e.target.value)}/>
+             {isSearchingDir&&<div className="absolute right-2 top-2"><Icon name="loader" size={16} className="animate-spin text-blue-500"/></div>}
+             {dirSearchResults.length>0&&<div className="absolute z-10 w-full mt-1 bg-white border rounded shadow-lg max-h-40 overflow-y-auto">
+               {dirSearchResults.map(u=><div key={u.email} className="p-2 hover:bg-blue-50 cursor-pointer flex items-center gap-2" onClick={()=>{toggleMember(u.email);setDirSearchQuery('');setDirSearchResults([])}}>
+                 {u.photoUrl?<img src={u.photoUrl} className="w-6 h-6 rounded-full"/>:<div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-xs text-blue-800">{u.name[0]}</div>}
+                 <div className="text-sm truncate"><div>{u.name}</div><div className="text-[10px] text-gray-500">{u.email}</div></div>
+               </div>)}
+             </div>}
+          </div>
+        </div>
+
+        {availableMembers.length>0&&<div className="mt-2 border rounded p-2 max-h-32 overflow-y-auto space-y-1 bg-gray-50">
+          <h4 className="text-sm font-bold text-gray-600 mb-1">グループメンバー・施設 ({selectedMembers.length}名選択中)</h4>
+          {availableMembers.map(m=><label key={m.email} className="flex items-center gap-2 text-sm p-1 hover:bg-white rounded cursor-pointer">
+            <input type="checkbox" checked={selectedMembers.includes(m.email)} onChange={()=>toggleMember(m.email)} className="rounded text-blue-600"/>
+            <span className="truncate">{m.name||m.email}</span>
+          </label>)}
+        </div>}
+
+        {overlapWarning.length>0&&<div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700 flex items-start gap-2">
+          <Icon name="alert-triangle" size={16} className="mt-0.5 flex-shrink-0"/>
+          <div><strong>予定の重複があります:</strong><br/>{overlapWarning.join(', ')}</div>
+        </div>}
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">場所</label><div className="relative"><div className="absolute top-2.5 left-2 text-gray-400"><Icon name="map-pin" size={16}/></div><input type="text" className="w-full border rounded p-2 pl-8" placeholder="会議室A" value={location} onChange={e=>setLocation(e.target.value)}/></div></div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1">詳細 / メモ</label><textarea className="w-full border rounded p-2 h-24" placeholder="詳細を入力..." value={description} onChange={e=>setDescription(e.target.value)}></textarea></div>
+      </div>
+      <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-lg">
+        <button onClick={onClose} disabled={isSaving} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded disabled:opacity-50">キャンセル</button>
+        <button onClick={handleSubmit} disabled={isSaving||!title} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+          {isSaving&&<div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full"></div>}{editingEvent?"更新":"保存"}
+        </button>
+      </div>
+    </div>
+  </div></ModalPortal>
+};
+
+/* === ResourceDetailsModal === */
+const ResourceDetailsModal=({isOpen,onClose,resourceId})=>{
+  const[details,setDetails]=useState(null);
+  const[isLoading,setIsLoading]=useState(true);
+
+  useEffect(()=>{
+    if(isOpen&&resourceId){
+      setIsLoading(true);
+      idbKV.get(resourceId,'resources').then(data=>{
+        setDetails(data||{id:resourceId,name:resourceId,type:'不明'});
+        setIsLoading(false);
+      }).catch(()=>{setIsLoading(false)});
+    }
+  },[isOpen,resourceId]);
+
+  if(!isOpen)return null;
+
+  return <ModalPortal><div className="fixed inset-0 bg-black/30 z-[100] flex justify-center items-center p-4">
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in relative">
+      <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+        <h3 className="font-bold text-gray-800">詳細情報</h3>
+        <button onClick={onClose} className="p-1.5 hover:bg-gray-200 rounded-full"><Icon name="x" size={16}/></button>
+      </div>
+      <div className="p-6 flex flex-col items-center">
+        {isLoading?<div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full my-4"></div>:
+          <>
+            {details?.photoUrl?<img src={details.photoUrl} className="w-20 h-20 rounded-full object-cover shadow-md mb-4"/>:
+             <div className="w-20 h-20 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-2xl font-bold shadow-md mb-4">{details?.name?.slice(0,2)?.toUpperCase()||'?'}</div>}
+            <h2 className="text-xl font-bold text-gray-800 text-center mb-1">{details?.name||'名称未設定'}</h2>
+            <p className="text-sm text-gray-500 text-center mb-4">{details?.email||details?.id}</p>
+            
+            <div className="w-full space-y-3 mt-2">
+              <div className="flex justify-between border-b pb-2">
+                <span className="text-gray-500 text-sm">種類</span>
+                <span className="font-medium text-sm">{(details?.isResource || (details?.id||'').includes('resource.calendar.google.com'))?'施設・備品':(details?.id||'').includes('group.calendar.google.com')?'グループカレンダー':'ユーザー'} {details?.type&&details.type!=='不明'?`(${details.type})`:''}</span>
+              </div>
+              {details?.isResource&&details?.capacity>0&&<div className="flex justify-between border-b pb-2">
+                <span className="text-gray-500 text-sm">収容人数</span>
+                <span className="font-medium text-sm">{details.capacity} 名</span>
+              </div>}
+              {details?.description&&<div className="text-sm mt-4 p-3 bg-gray-50 rounded border text-gray-700 whitespace-pre-wrap">{details.description}</div>}
+            </div>
+          </>
+        }
+      </div>
+    </div>
+  </div></ModalPortal>;
+};
+
+/* === QuickSearchOverlay === */
+const QuickSearchOverlay=({isOpen,onClose,resourceCals,resourcesMap,teamMembers,onAddToTeamBoard,initialUser,onEventClick,groups,onAddToGroup})=>{
+  const[query,setQuery]=useState('');
+  const[searchResults,setSearchResults]=useState([]);
+  const[isSearching,setIsSearching]=useState(false);
+  const[recentSearches,setRecentSearches]=useState([]);
+  const[cacheUsers,setCacheUsers]=useState([]);
+  const[selectedSchedule,setSelectedSchedule]=useState(null);
+  const[selectedDate,setSelectedDate]=useState(new Date());
+  const[isLoadingSchedule,setIsLoadingSchedule]=useState(false);
+  const[scheduleCache,setScheduleCache]=useState({});
+  const inputRef=useRef(null);
+  const currentReqRef=useRef('');
+
+  useLayoutEffect(()=>{
+    if(!isOpen){
+      setQuery('');setSearchResults([]);setSelectedSchedule(null);setSelectedDate(new Date());
+    } else {
+      idbKV.get('recent_searches').then(d=>setRecentSearches(d||[])).catch(()=>{});
+      
+      const cu = Object.values(resourcesMap||{})
+        .filter(r => r.email && r.name && r.email.includes('@'))
+        .map(r => ({email:r.email, name:r.name, type: r.email.includes('group.calendar.google.com') ? 'group' : (r.email.includes('resource.calendar.google.com') || r.isResource) ? 'facility' : 'user', photoUrl:r.photoUrl||''}));
+      setCacheUsers(cu);
+
+      if(initialUser) setTimeout(()=>selectItem(initialUser), 0);
+      else setTimeout(()=>inputRef.current?.focus(),100);
+    }
+  },[isOpen, resourcesMap, initialUser]);
+
+  useEffect(()=>{
+    if(!query.trim()){setSearchResults([]);return}
+    const q=query.toLowerCase();
+    // ローカル: resourceCalsから施設を検索
+    const localResults=(resourceCals||[]).filter(c=>c.name.toLowerCase().includes(q)||c.email.toLowerCase().includes(q)||(c.type||'').toLowerCase().includes(q)).slice(0,5).map(c=>({email:c.email,name:c.name,type:c.email.includes('group.calendar.google.com')?'group':'facility',photoUrl:''}));
+    setSearchResults(localResults);
+    // リモート: ユーザー検索
+    setIsSearching(true);
+    const t=setTimeout(()=>{
+      google.script.run.withSuccessHandler(d=>{
+        const users=JSON.parse(d).map(u=>({email:u.email,name:u.name,type:'user',photoUrl:u.photoUrl||''}));
+        setSearchResults(prev=>{
+          const merged=new Map();
+          users.forEach(u=>merged.set(u.email,u));
+          prev.forEach(p=>merged.set(p.email,p));
+          return Array.from(merged.values());
+        });
+        setIsSearching(false);
+      }).withFailureHandler(()=>setIsSearching(false)).searchDirectoryUsers(query);
+    },300);
+    return ()=>clearTimeout(t);
+  },[query]);
+
+  const fetchSchedule=(item, date)=>{
+    const targetEmail = item ? item.email : selectedSchedule?.email;
+    if(!targetEmail) return;
+    
+    const targetDateStr = new Date(date.getTime() - (date.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    const reqId = `${targetEmail}_${targetDateStr}`;
+    currentReqRef.current = reqId;
+    
+    if (scheduleCache[reqId]) {
+      setSelectedSchedule(prev => prev ? {...prev, events: scheduleCache[reqId]} : null);
+      setIsLoadingSchedule(false);
+    } else {
+      setIsLoadingSchedule(true);
+    }
+    
+    google.script.run.withSuccessHandler(d=>{
+      const data=JSON.parse(d);
+      
+      const newCache = {};
+      const baseDate = new Date(date);
+      for(let i=0; i<7; i++){
+        const dObj = new Date(baseDate); dObj.setDate(dObj.getDate() + i);
+        const dStr = new Date(dObj.getTime() - (dObj.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+        const rId = `${targetEmail}_${dStr}`;
+        const dStart = new Date(dObj); dStart.setHours(0,0,0,0);
+        const dEnd = new Date(dObj); dEnd.setHours(23,59,59,999);
+        const dayEvents = data.events.filter(ev=>{
+          const evStart = new Date(ev.start);
+          const evEnd = new Date(ev.end);
+          if(ev.isAllDay) return evStart.toDateString() === dObj.toDateString();
+          return evStart < dEnd && evEnd > dStart;
+        });
+        newCache[rId] = dayEvents;
+      }
+      
+      setScheduleCache(prev => ({...prev, ...newCache}));
+      
+      if (currentReqRef.current === reqId) {
+        setSelectedSchedule(prev => prev ? {...prev, events: newCache[reqId], color: data.color||prev.color} : null);
+        setIsLoadingSchedule(false);
+      }
+      
+      // 最近の検索に追加 (日付をまたぐ場合はitem情報が欠ける可能性があるので注意)
+      if(item) {
+        const updated=[{email:item.email,name:item.name||data.name,type:item.type,photoUrl:item.photoUrl||data.photoUrl},...(recentSearches||[]).filter(r=>r.email!==item.email)].slice(0,10);
+        setRecentSearches(updated);
+        idbKV.set('recent_searches',updated).catch(()=>{});
+      }
+    }).withFailureHandler(()=>{
+      if(currentReqRef.current === reqId) setIsLoadingSchedule(false);
+    }).getQuickSchedule(targetEmail, targetDateStr);
+  };
+
+  // メールアドレスから施設判定
+  const isResource = (email) => email && email.includes('resource.calendar.google.com');
+  const isGroupCal = (email) => email && email.includes('group.calendar.google.com');
+
+  const selectItem=(item)=>{
+    const itemType = item.type || (isGroupCal(item.email) ? 'group' : isResource(item.email) ? 'facility' : 'user');
+    // resourcesMapにキャッシュ済みデータがある場合は即座に表示
+    const cached = resourcesMap[item.email];
+    const today = new Date();
+    if (cached && Array.isArray(cached.events) && cached.events.length > 0) {
+      const todayStr = today.toDateString();
+      const todayEvents = cached.events.filter(ev => {
+        const s = new Date(ev.start), e = new Date(ev.end);
+        // 終日予定か、今日開始か、今日をまたぐ予定を正確に取得
+        return s.toDateString() === todayStr || (s.getTime() < today.getTime() + 86400000 && e.getTime() > today.setHours(0,0,0,0));
+      }).sort((a,b) => new Date(a.start) - new Date(b.start));
+      setSelectedSchedule({
+        email: item.email, name: cached.name || item.name, photoUrl: cached.photoUrl || item.photoUrl,
+        color: cached.color || '#4285F4', events: todayEvents, type: itemType
+      });
+      setSelectedDate(today);
+      // 裏でAPIから最新データを取得
+      fetchSchedule(item, today);
+    } else {
+      setSelectedSchedule({email:item.email, name:item.name, photoUrl:item.photoUrl, type: itemType, events: null});
+      setSelectedDate(today);
+      fetchSchedule(item, today);
+    }
+  };
+
+  const changeDate=(offset)=>{
+    const nd = new Date(selectedDate);
+    nd.setDate(nd.getDate() + offset);
+    setSelectedDate(nd);
+    
+    const targetEmail = selectedSchedule?.email;
+    const targetDateStr = new Date(nd.getTime() - (nd.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    const reqId = `${targetEmail}_${targetDateStr}`;
+    if (!scheduleCache[reqId]) {
+      setSelectedSchedule(prev => prev ? {...prev, events: null} : null);
+    }
+    
+    fetchSchedule(null, nd);
+  };
+  const setToday=()=>{
+    const nd = new Date();
+    setSelectedDate(nd);
+    
+    const targetEmail = selectedSchedule?.email;
+    const targetDateStr = new Date(nd.getTime() - (nd.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    const reqId = `${targetEmail}_${targetDateStr}`;
+    if (!scheduleCache[reqId]) {
+      setSelectedSchedule(prev => prev ? {...prev, events: null} : null);
+    }
+    
+    fetchSchedule(null, nd);
+  };
+
+  const fmtTime=(iso)=>{const d=new Date(iso);return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})};
+
+  // スケジュールから状態を算出
+  const getStatus = () => {
+    if(!selectedSchedule || !selectedSchedule.events) return null;
+    const nowMs = new Date().getTime();
+    const isToday = selectedDate.toDateString() === new Date().toDateString();
+    
+    const allDayEvents = selectedSchedule.events.filter(ev => ev.isAllDay);
+    const timeEvents = selectedSchedule.events.filter(ev => !ev.isAllDay);
+    
+    let current = null, next = null;
+    if(isToday) {
+      for(const ev of timeEvents) {
+        const s = new Date(ev.start).getTime(), e = new Date(ev.end).getTime();
+        if(s <= nowMs && e > nowMs) current = ev;
+        else if(s > nowMs && !next) next = ev;
+      }
+    }
+    return { allDayEvents, current, next, isFree: !current, isToday };
+  };
+
+  if(!isOpen)return null;
+  const status = getStatus();
+  const isTeamMember = selectedSchedule && teamMembers.includes(selectedSchedule.email);
+
+  return <ModalPortal><div className="fixed inset-0 bg-black/40 z-[1100] flex items-start justify-center pt-[5vh] md:pt-[10vh] p-4" onClick={onClose}>
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] md:max-h-[80vh] flex flex-col overflow-hidden" onClick={e=>e.stopPropagation()}>
+      {/* 検索バー */}
+      <div className="p-3 border-b flex items-center gap-2 bg-gray-50">
+        <Icon name="search" size={20} className="text-gray-400 flex-shrink-0"/>
+        <input ref={inputRef} type="text" value={query} onChange={e=>setQuery(e.target.value)} placeholder="ユーザーや施設を検索..." className="flex-1 bg-transparent text-base outline-none text-gray-800 placeholder-gray-400" autoComplete="off"/>
+        {isSearching&&<div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full flex-shrink-0"></div>}
+        <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full flex-shrink-0"><Icon name="x" size={18}/></button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {selectedSchedule?(
+          <div className="p-4 relative">
+            {isLoadingSchedule && <div className="absolute top-4 right-4 text-[10px] text-blue-500 flex items-center gap-1 bg-blue-50 px-2 py-1 rounded-full"><Icon name="loader" size={10} className="animate-spin"/> 更新中</div>}
+            <button onClick={()=>{setSelectedSchedule(null);setQuery('');}} className="text-sm text-blue-600 hover:underline mb-3 flex items-center gap-1"><Icon name="arrow-left" size={14}/>検索に戻る</button>
+            <div className="flex items-center gap-3 mb-4">
+              {selectedSchedule.photoUrl?<img src={selectedSchedule.photoUrl} className="w-10 h-10 rounded-full object-cover"/>:
+              <div className="w-10 h-10 rounded-full text-white flex items-center justify-center text-sm font-bold" style={{backgroundColor:selectedSchedule.color||'#4285F4'}}>
+                {selectedSchedule.type === 'group' ? <Icon name="users" size={18}/> : selectedSchedule.type === 'facility' ? <Icon name="building" size={18}/> : (selectedSchedule.name||'?').slice(0,2)}
+              </div>}
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2 truncate">
+                  {selectedSchedule.name}
+                </h3>
+                <p className="text-xs text-gray-500 mb-1.5 truncate">{selectedSchedule.email}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onAddToTeamBoard && (!selectedSchedule.type || selectedSchedule.type==='user') && (
+                    <button onClick={()=>onAddToTeamBoard(selectedSchedule.email)} className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 ${isTeamMember?'bg-red-50 text-red-600 border-red-200 hover:bg-red-100':'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100'}`}>
+                      {isTeamMember?<><Icon name="minus" size={10}/> チームボード解除</>:<><Icon name="plus" size={10}/> チームボード追加</>}
+                    </button>
+                  )}
+                  {groups && groups.length > 0 && onAddToGroup && (!selectedSchedule.type || selectedSchedule.type==='user') && (
+                    <select 
+                      className="text-[10px] px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-700 outline-none hover:bg-gray-50 cursor-pointer max-w-[140px]"
+                      onChange={(e) => {
+                        if(e.target.value) {
+                          onAddToGroup(e.target.value, selectedSchedule.email);
+                          e.target.value = "";
+                        }
+                      }}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>＋ グループに追加</option>
+                      {groups.map(g => {
+                        const isMember = g.members.includes(selectedSchedule.email);
+                        return <option key={g.id} value={g.id} disabled={isMember}>
+                          {g.name} {isMember ? '(追加済)' : ''}
+                        </option>
+                      })}
+                    </select>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-between mb-3 bg-gray-50 p-1.5 rounded-lg border">
+              <button onClick={()=>changeDate(-1)} className="p-1.5 hover:bg-white rounded shadow-sm text-gray-600"><Icon name="chevron-left" size={16}/></button>
+              <div className="text-sm font-bold text-gray-700 flex items-center gap-2 cursor-pointer" onClick={setToday}>
+                {selectedDate.toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'})}
+              </div>
+              <button onClick={()=>changeDate(1)} className="p-1.5 hover:bg-white rounded shadow-sm text-gray-600"><Icon name="chevron-right" size={16}/></button>
+            </div>
+
+            {selectedSchedule.events ? (
+              <div className="relative">
+                {status && status.isToday && (
+                  <div className="mb-4 p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+                    <div className="text-xs font-bold text-blue-800 mb-1 flex items-center gap-1"><Icon name="clock" size={12}/> 現在のステータス</div>
+                    {status.allDayEvents.length>0 && <div className="text-xs text-indigo-700 mb-1">【終日】{status.allDayEvents.map(e=>e.title).join(', ')}</div>}
+                    {status.isFree?(
+                      <div className="text-xs text-green-700 font-medium flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-green-500"></span>今は空いています {status.next?` (次: ${fmtTime(status.next.start)}〜)`:''}</div>
+                    ):(
+                      <div className="text-xs text-gray-700">
+                        <span className="text-blue-700 font-bold">{status.current.title}</span> ({fmtTime(status.current.start)} ~ {fmtTime(status.current.end)})
+                        {status.next&&<span className="text-gray-500 ml-2">→ 次: {fmtTime(status.next.start)} {status.next.title}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {selectedSchedule.events.length===0?<p className="text-sm text-gray-400 p-4 text-center border-2 border-dashed rounded">予定はありません</p>:
+                <div className="space-y-1">
+                  {selectedSchedule.events.filter(ev=>!(status && status.isToday && ev.isAllDay)).map((ev,i)=>(
+                    <div key={ev.id||i} onClick={() => onEventClick && onEventClick(ev)} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 border-l-4 text-sm cursor-pointer" style={{borderColor:ev.color||selectedSchedule.color||'#4285F4'}}>
+                      <span className="text-gray-500 font-mono text-xs whitespace-nowrap mt-0.5">{ev.isAllDay?'終日':fmtTime(ev.start)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-800 truncate">{ev.title||'予定あり'}</div>
+                        {!ev.isAllDay&&<div className="text-xs text-gray-400">{fmtTime(ev.start)} - {fmtTime(ev.end)}</div>}
+                        {ev.location&&<div className="text-xs text-gray-400 flex items-center gap-0.5 mt-0.5"><Icon name="map-pin" size={10}/>{ev.location}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            ) : isLoadingSchedule ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+                <p className="text-sm text-gray-500">スケジュールを取得中...</p>
+              </div>
+            ) : null}
+          </div>
+        ):(
+          <div className="p-3">
+            {!query.trim()&&(recentSearches.length>0 || cacheUsers.length>0)&&(
+              <div className="mb-4">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1"><Icon name="clock" size={12}/>おすすめ / 最近の検索</h4>
+                <div className="space-y-1">
+                  {/* 重複排除して表示 */}
+                  {Array.from(new Map([...recentSearches, ...cacheUsers].map(item => [item.email, item])).values()).slice(0, 15).map((r,i)=>{
+                    const isInRecent = recentSearches.some(rs => rs.email === r.email);
+                    return <div key={r.email+i} className="flex items-center group">
+                      <button onClick={()=>selectItem(r)} className="flex-1 flex items-center gap-3 p-2 hover:bg-blue-50 rounded text-left transition-colors min-w-0">
+                        {r.photoUrl ? <img src={r.photoUrl} className="w-8 h-8 rounded-full object-cover flex-shrink-0"/> : <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 flex-shrink-0">{(r.name||'?').slice(0,2)}</div>}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-800 truncate">{r.name}</div>
+                          <div className="text-xs text-gray-400 truncate">{r.email}</div>
+                        </div>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 ${r.type==='facility'?'bg-orange-50 text-orange-600 border-orange-200':r.type==='group'?'bg-purple-50 text-purple-600 border-purple-200':'bg-blue-50 text-blue-600 border-blue-200'}`}>{r.type==='facility'?'施設':r.type==='group'?'グループ':'ユーザー'}</span>
+                      </button>
+                      {isInRecent && <button onClick={(e)=>{e.stopPropagation();const updated=recentSearches.filter(rs=>rs.email!==r.email);setRecentSearches(updated);idbKV.set('recent_searches',updated).catch(()=>{})}} className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" title="履歴から削除"><Icon name="x" size={14}/></button>}
+                    </div>
+                  })}
+                </div>
+              </div>
+            )}
+            {searchResults.length>0&&(
+              <div>
+                {query.trim()&&<h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">検索結果</h4>}
+                <div className="space-y-1">
+                  {searchResults.map((r,i)=>(
+                    <button key={r.email+i} onClick={()=>selectItem(r)} className="w-full flex items-center gap-3 p-2 hover:bg-blue-50 rounded text-left transition-colors">
+                      {r.photoUrl?<img src={r.photoUrl} className="w-8 h-8 rounded-full object-cover flex-shrink-0"/>:
+                      <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 flex-shrink-0">{(r.name||'?').slice(0,2)}</div>}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-800 truncate">{r.name}</div>
+                        <div className="text-xs text-gray-400 truncate">{r.email}</div>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 ${r.type==='facility'?'bg-orange-50 text-orange-600 border-orange-200':r.type==='group'?'bg-purple-50 text-purple-600 border-purple-200':'bg-blue-50 text-blue-600 border-blue-200'}`}>{r.type==='facility'?'施設':r.type==='group'?'グループ':'ユーザー'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {query.trim()&&searchResults.length===0&&!isSearching&&<p className="text-sm text-gray-400 text-center py-8">該当する結果がありません</p>}
+          </div>
+        )}
+      </div>
+    </div>
+  </div></ModalPortal>;
+};
+
+/* === TeamStatusBar === */
+const TeamStatusBar=({teamMembers,isOpen,onToggle,onReorder,onUserClick})=>{
+  const[statuses,setStatuses]=useState([]);
+  const[isLoading,setIsLoading]=useState(false);
+  const[lastFetchMembers,setLastFetchMembers]=useState('');
+
+  useEffect(()=>{
+    if(typeof idbKV!=='undefined'){
+      idbKV.get('lastTeamStatuses').then(cached=>{
+        if(cached && cached.length > 0) setStatuses(cached);
+      }).catch(()=>{});
+    }
+  },[]);
+
+  const fetchStatus=useCallback(()=>{
+    if(!teamMembers||teamMembers.length===0)return;
+    setIsLoading(true);
+    google.script.run.withSuccessHandler(d=>{
+      try{
+        const parsed = JSON.parse(d);
+        setStatuses(parsed);
+        if(typeof idbKV!=='undefined') idbKV.set('lastTeamStatuses', parsed).catch(()=>{});
+      }catch(e){}
+      setIsLoading(false);
+    }).withFailureHandler(()=>setIsLoading(false)).getTeamStatus(teamMembers);
+  },[teamMembers]);
+
+  useEffect(()=>{
+    if(teamMembers&&teamMembers.length>0){
+      const sortedStr = [...teamMembers].sort().join(',');
+      if (lastFetchMembers !== sortedStr) {
+        fetchStatus();
+        setLastFetchMembers(sortedStr);
+      }
+      const interval=setInterval(fetchStatus,900000); // 15分ごと更新
+      return ()=>clearInterval(interval);
+    }
+  },[teamMembers,fetchStatus,lastFetchMembers]);
+
+  const sortedStatuses = useMemo(()=>{
+    if(!teamMembers) return statuses;
+    return statuses.filter(s => teamMembers.includes(s.email)).sort((a,b)=>{
+      const iA = teamMembers.indexOf(a.email);
+      const iB = teamMembers.indexOf(b.email);
+      return iA - iB;
+    });
+  },[statuses,teamMembers]);
+
+  if(!teamMembers||teamMembers.length===0)return null;
+
+  const fmtTime=(iso)=>{const d=new Date(iso);return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})};
+
+  return <div className="border-t bg-white shadow-[0_-2px_8px_rgba(0,0,0,0.06)] z-20 relative">
+    <button onClick={onToggle} className="w-full flex items-center justify-between px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-50 transition-colors">
+      <span className="flex items-center gap-2">
+        <Icon name="users" size={16} className="text-blue-600"/>
+        チームボード ({sortedStatuses.length}名)
+        {isLoading&&<div className="animate-spin h-3 w-3 border-2 border-blue-500 border-t-transparent rounded-full"></div>}
+      </span>
+      <Icon name={isOpen?'chevron-down':'chevron-up'} size={16}/>
+    </button>
+    {isOpen&&<div className="px-2 pb-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-1.5 md:max-h-[96px] overflow-y-auto custom-scrollbar">
+      {sortedStatuses.map((s, idx)=>(
+        <div key={s.email} draggable onClick={()=>onUserClick&&onUserClick(s)} 
+          onDragStart={e=>{e.dataTransfer.setData('text/plain',idx.toString());e.dataTransfer.effectAllowed='move';e.currentTarget.style.opacity='0.5'}}
+          onDragEnd={e=>{e.currentTarget.style.opacity='1'}}
+          onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='move'}}
+          onDrop={e=>{e.preventDefault();const from=parseInt(e.dataTransfer.getData('text/plain'));const to=idx;if(from===to||isNaN(from))return;onReorder&&onReorder(from,to);}}
+          className="flex items-center gap-1.5 p-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors text-sm border cursor-grab active:cursor-grabbing hover:border-blue-300">
+          {s.photoUrl?<img src={s.photoUrl} className="w-6 h-6 rounded-full object-cover flex-shrink-0"/>:
+          <div className="w-6 h-6 rounded-full bg-gray-300 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">{(s.name||'?').slice(0,1)}</div>}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1 min-w-0">
+              <div className="text-xs font-bold text-gray-700 truncate min-w-[20px]">{s.name}</div>
+              {s.allDayEvents&&s.allDayEvents.length>0&&<div className="text-[9px] bg-indigo-100 text-indigo-700 px-1 rounded truncate max-w-[100px] flex-shrink-0" title={s.allDayEvents.map(e=>e.title).join(', ')}>{s.allDayEvents[0].title}</div>}
+            </div>
+            {s.isFree?(
+              <div className="text-[10px] text-gray-500 flex items-center gap-0.5 mt-0.5">{s.next?<span className="truncate"> → {fmtTime(s.next.start)} {s.next.title}</span>:'予定なし'}</div>
+            ):(
+              <div className="text-[10px] text-gray-500 truncate mt-0.5">
+                <span className="text-blue-600 font-medium">{s.current.title}</span> ~{fmtTime(s.current.end)}
+                {s.next&&<span className="text-gray-400"> → {fmtTime(s.next.start)} {s.next.title}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>}
+  </div>;
+};
+
+
+/* === SettingsModal === */
+const SettingsModal=({isOpen,onClose,settings,onSaveSettings,myEmail,initialFocus,initialGroupId,webAppUrl,onOpenDetails})=>{
+  const{showAlert,showConfirm}=useAlert()||{};
+  const[activeTab,setActiveTab]=useState('groups');
+  const[localGroups,setLocalGroups]=useState([]);
+  const[hiddenCalendars,setHiddenCalendars]=useState([]);
+  const[useMonoColor,setUseMonoColor]=useState(false);
+  const[headerPadding,setHeaderPadding]=useState(0);
+  const[weekStartDay,setWeekStartDay]=useState(0);
+  const[editingGroup,setEditingGroup]=useState(null);
+  const[isSaving,setIsSaving]=useState(false);
+  const[subscribedCals,setSubscribedCals]=useState([]);
+  const[resourceCals,setResourceCals]=useState([]);
+  const[searchQuery,setSearchQuery]=useState('');
+  const[dirSearchQuery,setDirSearchQuery]=useState('');
+  const[dirSearchResults,setDirSearchResults]=useState([]);
+  const[isSearchingDir,setIsSearchingDir]=useState(false);
+  const[showOnlyAccessible,setShowOnlyAccessible]=useState(false);
+  const[teamMembers,setTeamMembers]=useState([]);
+  const[teamSearchQuery,setTeamSearchQuery]=useState('');
+  const[teamSearchResults,setTeamSearchResults]=useState([]);
+  const[isSearchingTeam,setIsSearchingTeam]=useState(false);
+
+  useEffect(()=>{
+    if(dirSearchQuery.trim()){
+      setIsSearchingDir(true);
+      const t=setTimeout(()=>google.script.run.withSuccessHandler(d=>{setDirSearchResults(JSON.parse(d));setIsSearchingDir(false)}).searchDirectoryUsers(dirSearchQuery),500);
+      return ()=>clearTimeout(t);
+    }else{setDirSearchResults([]);setIsSearchingDir(false)}
+  },[dirSearchQuery]);
+
+  useEffect(()=>{
+    if(isOpen){
+      google.script.run.withSuccessHandler(d=>setSubscribedCals(JSON.parse(d))).getSubscribedCalendars();
+      google.script.run.withSuccessHandler(d=>setResourceCals(JSON.parse(d))).getResourceCalendars();
+    }
+  },[isOpen]);
+
+  useEffect(()=>{if(isOpen&&settings){
+    setLocalGroups(JSON.parse(JSON.stringify(settings.groups||[])));
+    setHiddenCalendars([...(settings.hiddenCalendars||[])]);
+    setUseMonoColor(!!settings.useMonoColor);
+    setHeaderPadding(settings.headerPadding||0);
+    setWeekStartDay(settings.weekStartDay||0);
+    setTeamMembers([...(settings.teamMembers||[])]);
+    if(initialFocus==='new_group'){setActiveTab('groups');handleCreateGroup()}
+    else if(initialGroupId){setActiveTab('groups');const g=settings.groups.find(x=>x.id===initialGroupId);if(g)setEditingGroup(JSON.parse(JSON.stringify(g)))}
+    else{setActiveTab('groups');setEditingGroup(null)}
+  }},[isOpen,settings,initialFocus,initialGroupId]);
+
+  const handleCreateGroup=()=>{setEditingGroup({id:'grp_'+Date.now(),name:'新しいグループ',members:[myEmail]})};
+  const handleEditGroup=(g)=>{setEditingGroup(JSON.parse(JSON.stringify(g)))};
+  const handleDuplicateGroup=(g)=>{
+    const dup={...JSON.parse(JSON.stringify(g)), id:'grp_'+Date.now(), name:g.name+' (コピー)'};
+    setLocalGroups(prev=>[...prev, dup]);
+  };
+  const handleDeleteGroup=async(id)=>{
+    if(id==='default_registered')return;
+    const ok=await showConfirm('このグループを削除しますか？');if(!ok)return;
+    setLocalGroups(prev=>prev.filter(g=>g.id!==id));if(editingGroup&&editingGroup.id===id)setEditingGroup(null);
+  };
+  const saveGroupEditing=()=>{
+    if(!editingGroup||!editingGroup.name.trim())return;
+    setLocalGroups(prev=>{
+      const idx=prev.findIndex(g=>g.id===editingGroup.id);
+      if(idx>=0){const n=[...prev];n[idx]=editingGroup;return n}return[...prev,editingGroup]
+    });
+    setEditingGroup(null);
+  };
+
+  const handleSave=async()=>{
+    setIsSaving(true);
+    let finalGroups = localGroups;
+    // 編集中のグループがあれば自動的に適用（コミット）する
+    if (editingGroup && editingGroup.name.trim()) {
+      const idx = finalGroups.findIndex(g => g.id === editingGroup.id);
+      if (idx >= 0) {
+        finalGroups = [...finalGroups];
+        finalGroups[idx] = editingGroup;
+      } else {
+        finalGroups = [...finalGroups, editingGroup];
+      }
+    }
+    const newSettings={...settings,groups:finalGroups,hiddenCalendars,useMonoColor,headerPadding,teamMembers,weekStartDay};
+    try{
+      await new Promise((res,rej)=>google.script.run.withSuccessHandler(res).withFailureHandler(rej).saveSettings(newSettings));
+      onSaveSettings(newSettings);
+      setIsSaving(false);
+      onClose();
+    }catch(e){
+      showAlert('設定の保存に失敗しました: '+e);
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(()=>{
+    if(isOpen) setIsSaving(false);
+  },[isOpen]);
+
+  if(!isOpen)return null;
+
+  return <ModalPortal><div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4">
+    <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh] overflow-hidden">
+      <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Icon name="settings"/>設定</h2>
+        <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full"><Icon name="x"/></button>
+      </div>
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+        {/* サイドバー（PC: 縦、スマホ: セレクトボックス） */}
+        <div className="md:w-48 bg-gray-50 border-b md:border-b-0 md:border-r flex flex-col">
+          {/* スマホ用セレクトボックス */}
+          <div className="md:hidden p-3 bg-white">
+            <select value={activeTab} onChange={(e)=>setActiveTab(e.target.value)} className="w-full p-2 border rounded border-gray-300 bg-gray-50 font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="groups">グループ管理</option>
+              <option value="design">デザイン設定</option>
+              <option value="team">チームメンバー</option>
+              <option value="data">データ管理</option>
+            </select>
+          </div>
+          {/* PC用縦タブ */}
+          <div className="hidden md:flex flex-col flex-1">
+            <button onClick={()=>setActiveTab('groups')} className={`w-full p-4 text-left font-medium border-l-4 text-sm whitespace-nowrap ${activeTab==='groups'?'border-l-blue-500 bg-blue-50 text-blue-700':'border-l-transparent text-gray-600 hover:bg-gray-100'}`}>グループ管理</button>
+            <button onClick={()=>setActiveTab('design')} className={`w-full p-4 text-left font-medium border-l-4 text-sm whitespace-nowrap ${activeTab==='design'?'border-l-blue-500 bg-blue-50 text-blue-700':'border-l-transparent text-gray-600 hover:bg-gray-100'}`}>デザイン設定</button>
+            <button onClick={()=>setActiveTab('team')} className={`w-full p-4 text-left font-medium border-l-4 text-sm whitespace-nowrap ${activeTab==='team'?'border-l-blue-500 bg-blue-50 text-blue-700':'border-l-transparent text-gray-600 hover:bg-gray-100'}`}>チームメンバー</button>
+            <button onClick={()=>setActiveTab('data')} className={`w-full p-4 text-left font-medium border-l-4 text-sm whitespace-nowrap ${activeTab==='data'?'border-l-blue-500 bg-blue-50 text-blue-700':'border-l-transparent text-gray-600 hover:bg-gray-100'}`}>データ管理</button>
+          </div>
+          <div className="hidden md:block p-4 text-xs text-gray-400 text-center border-t mt-auto">
+            {typeof APP_VERSION!=='undefined'?APP_VERSION:'v2.0.0'}
+          </div>
+        </div>
+        {/* メインコンテンツ */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+          {activeTab==='groups'&&(!editingGroup?(
+            <div>
+              <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-bold">グループ一覧</h3><button onClick={handleCreateGroup} className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">+ 新規作成</button></div>
+              <div className="space-y-2">{localGroups.map(g=><div key={g.id} className="flex justify-between items-center p-3 border rounded bg-white hover:border-blue-300">
+                <div><div className="font-bold">{g.name}</div><div className="text-xs text-gray-500">{g.members.filter(m=>!m.startsWith('_SEP_')).length} メンバー</div></div>
+                <div className="flex gap-1">
+                  <button onClick={()=>handleEditGroup(g)} className="p-2 text-blue-600 hover:bg-blue-50 rounded" title="編集"><Icon name="edit-2" size={16}/></button>
+                  <button onClick={()=>handleDuplicateGroup(g)} className="p-2 text-gray-600 hover:bg-gray-100 rounded" title="複製"><Icon name="copy" size={16}/></button>
+                  {g.id!=='default_registered'&&<button onClick={()=>handleDeleteGroup(g.id)} className="p-2 text-red-600 hover:bg-red-50 rounded" title="削除"><Icon name="trash-2" size={16}/></button>}
+                </div>
+              </div>)}</div>
+            </div>
+          ):(
+            <div className="flex flex-col h-full overflow-hidden min-h-[500px]">
+              <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                <button onClick={()=>setEditingGroup(null)} className="text-gray-500 hover:text-gray-800 flex items-center gap-1"><Icon name="chevron-left" size={16}/>戻る</button>
+                <h3 className="text-lg font-bold">グループの編集</h3>
+                <button onClick={saveGroupEditing} className="px-4 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">適用</button>
+              </div>
+              <div className="mb-4 flex-shrink-0">
+                <label className="block text-sm font-medium mb-1">グループ名</label>
+                <input type="text" value={editingGroup.name} onChange={e=>setEditingGroup({...editingGroup,name:e.target.value})} className="w-full border rounded p-2"/>
+              </div>
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <label className="block text-sm font-medium mb-1">メンバーの追加・削除 ({editingGroup.members.filter(m=>!m.startsWith('_SEP_')).length}名)</label>
+                
+                <div className="mb-3 relative">
+                  <input type="text" placeholder="ユーザーを検索して追加..." value={dirSearchQuery} onChange={e=>setDirSearchQuery(e.target.value)} className="w-full border rounded p-2 text-sm border-blue-300"/>
+                  {isSearchingDir&&<div className="absolute right-2 top-2"><Icon name="loader" size={16} className="animate-spin text-blue-500"/></div>}
+                  {dirSearchResults.length>0&&<div className="absolute z-10 w-full mt-1 bg-white border rounded shadow-lg max-h-40 overflow-y-auto">
+                    {dirSearchResults.map(u=><div key={u.email} className="p-2 hover:bg-blue-50 cursor-pointer flex items-center gap-2" onClick={()=>{setEditingGroup({...editingGroup,members:[...editingGroup.members,u.email]});setDirSearchQuery('');setDirSearchResults([])}}>
+                      {u.photoUrl?<img src={u.photoUrl} className="w-6 h-6 rounded-full"/>:<div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-xs text-blue-800">{u.name[0]}</div>}
+                      <div className="text-sm truncate"><div>{u.name}</div><div className="text-[10px] text-gray-500">{u.email}</div></div>
+                    </div>)}
+                  </div>}
+                </div>
+
+                {/* 登録済みメンバー一覧（並び替え・削除） */}
+                <div className="mb-3 border rounded bg-white p-2 max-h-[200px] overflow-y-auto custom-scrollbar flex-shrink-0">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <h4 className="text-xs font-bold text-gray-500 flex items-center gap-1"><Icon name="list" size={12}/>登録メンバー一覧（ドラッグで並び替え）</h4>
+                    <button onClick={()=>{
+                      const id = '_SEP_:'+Date.now()+':区切り線';
+                      setEditingGroup({...editingGroup, members:[id, ...editingGroup.members]});
+                    }} className="text-[10px] bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded border">+ 区切り線を追加</button>
+                  </div>
+                  {editingGroup.members.length===0 ? <div className="text-xs text-gray-400 text-center py-3">メンバーがいません</div> :
+                  <div className="space-y-0.5">
+                    {editingGroup.members.map((mid, idx)=>{
+                      const isSep = mid.startsWith('_SEP_');
+                      const sepLabel = isSep ? (mid.split(':').slice(2).join(':') || '') : '';
+                      const resInfo = !isSep ? (subscribedCals.find(c=>c.id===mid) || resourceCals.find(c=>c.email===mid)) : null;
+                      const displayName = isSep ? (sepLabel||'区切り線') : (resInfo ? resInfo.name : mid.split('@')[0]);
+                      const isFacility = !isSep && (mid.includes('resource.calendar.google.com') || mid.includes('group.calendar.google.com'));
+                      const baseKey = isSep ? `_SEP_:${mid.split(':')[1]}` : mid;
+                      return <div key={baseKey} draggable className={`flex items-center gap-2 p-1.5 rounded hover:bg-gray-100 text-sm cursor-grab active:cursor-grabbing border transition-all ${isSep ? 'bg-gray-100 border-gray-300' : 'bg-gray-50 border-transparent hover:border-gray-300'}`}
+                        onDragStart={e=>{e.dataTransfer.setData('text/plain',idx.toString());e.dataTransfer.effectAllowed='move'}}
+                        onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='move'}}
+                        onDrop={e=>{e.preventDefault();const from=parseInt(e.dataTransfer.getData('text/plain'));const to=idx;if(from===to)return;const nm=[...editingGroup.members];const item=nm.splice(from,1)[0];nm.splice(to,0,item);setEditingGroup({...editingGroup,members:nm})}}>
+                        <Icon name="grip-vertical" size={12} className="text-gray-400 flex-shrink-0"/>
+                        {!isSep ? (
+                          <>
+                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${isFacility?'bg-orange-100 text-orange-700':'bg-blue-100 text-blue-700'}`}>{isFacility?<Icon name="building" size={10}/>:displayName.slice(0,1)}</div>
+                            <div className="flex-1 min-w-0 truncate">
+                              <span className="font-medium text-gray-800">{displayName}</span>
+                              {displayName !== mid && <span className="text-[10px] text-gray-400 ml-1">({mid.split('@')[0]})</span>}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex-1 min-w-0 flex items-center gap-2">
+                            <Icon name="minus" size={14} className="text-gray-400"/>
+                            <input type="text" value={sepLabel} onChange={e=>{
+                              const nm=[...editingGroup.members];
+                              nm[idx] = `_SEP_:${mid.split(':')[1]}:${e.target.value}`;
+                              setEditingGroup({...editingGroup, members:nm});
+                            }} className="flex-1 border-b border-gray-300 bg-transparent font-bold text-gray-700 text-xs px-1 outline-none focus:border-blue-500" placeholder="区切り線ラベル"/>
+                          </div>
+                        )}
+                        <button onClick={()=>{const nm=editingGroup.members.filter(m=>m!==mid);setEditingGroup({...editingGroup,members:nm})}} className="p-0.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0" title="削除"><Icon name="x" size={14}/></button>
+                      </div>
+                    })}
+                  </div>}
+                </div>
+
+                <input type="text" placeholder="カレンダーや施設を絞り込み検索..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="w-full border rounded p-2 mb-2 text-sm bg-gray-50 flex-shrink-0"/>
+                <div className="flex-1 overflow-y-auto border rounded p-2 space-y-4 bg-gray-50 min-h-[150px]">
+                  <div>
+                    <h4 className="font-bold text-sm text-gray-600 mb-2 border-b pb-1">登録済みカレンダー</h4>
+                    <div className="space-y-1">
+                      {subscribedCals.filter(c=>c.name.toLowerCase().includes(searchQuery.toLowerCase())||c.id.toLowerCase().includes(searchQuery.toLowerCase())).map(c=>{
+                        const isChecked=editingGroup.members.includes(c.id);
+                        return <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-100 rounded cursor-pointer text-sm">
+                          <input type="checkbox" checked={isChecked} onChange={e=>{
+                            const nm=e.target.checked?[...editingGroup.members,c.id]:editingGroup.members.filter(m=>m!==c.id);
+                            setEditingGroup({...editingGroup,members:nm});
+                          }} className="w-4 h-4 text-blue-600"/>
+                          <span className="truncate">{c.name} {c.isPrimary&&<span className="text-[10px] bg-blue-100 text-blue-800 px-1 rounded ml-1">メイン</span>}</span>
+                        </label>
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between items-center mb-2 border-b pb-1">
+                      <h4 className="font-bold text-sm text-gray-600 flex items-center gap-2">
+                        施設・リソース
+                        {resourceCals.length > 0 && resourceCals[0].type === 'extracted' ? (
+                          <span className="text-[10px] bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded border border-yellow-200 whitespace-nowrap font-normal">
+                            予定から抽出 (一般権限)
+                          </span>
+                        ) : resourceCals.length > 0 ? (
+                          <span className="text-[10px] bg-green-100 text-green-800 px-1.5 py-0.5 rounded border border-green-200 whitespace-nowrap font-normal">
+                            全件取得済 (管理者権限)
+                          </span>
+                        ) : null}
+                      </h4>
+                      <label className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer hover:text-gray-800">
+                        <input type="checkbox" checked={showOnlyAccessible} onChange={e=>setShowOnlyAccessible(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500"/>
+                        閲覧権限がある施設のみ表示
+                      </label>
+                    </div>
+                    <div className="space-y-4">
+                      {(()=>{
+                        const filteredRes=resourceCals.filter(c=>{
+                          const q=searchQuery.toLowerCase();
+                          return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || (c.type||'その他 (未分類)').toLowerCase().includes(q);
+                        }).filter(c=>!showOnlyAccessible || c.hasAccess);
+                        const grouped={};
+                        filteredRes.forEach(c=>{
+                          const t=c.type||'その他 (未分類)';
+                          if(!grouped[t])grouped[t]=[];
+                          grouped[t].push(c);
+                        });
+                        if(Object.keys(grouped).length===0) return <div className="text-sm text-gray-500 p-2">表示できる施設がありません</div>;
+                        return Object.entries(grouped).sort().map(([type, cals])=>(
+                          <div key={type} className="bg-white border rounded p-2 shadow-sm">
+                            <h5 className="font-bold text-xs text-blue-800 mb-2 border-b border-blue-100 pb-1">{type} ({cals.length})</h5>
+                            <div className="space-y-1">
+                              {cals.map(c=>{
+                                const isChecked=editingGroup.members.includes(c.email);
+                                return <div key={c.email} className="flex items-start gap-2 p-1.5 hover:bg-gray-50 rounded text-sm group">
+                                  <label className="flex-1 min-w-0 flex items-start gap-2 cursor-pointer">
+                                    <input type="checkbox" checked={isChecked} onChange={e=>{
+                                      const nm=e.target.checked?[...editingGroup.members,c.email]:editingGroup.members.filter(m=>m!==c.email);
+                                      setEditingGroup({...editingGroup,members:nm});
+                                    }} className="w-4 h-4 text-blue-600 mt-0.5"/>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="truncate font-medium">{c.name} {c.capacity>0&&<span className="text-[10px] bg-gray-100 text-gray-600 px-1 rounded ml-1 border border-gray-200">収容: {c.capacity}名</span>}</div>
+                                      {c.description&&<div className="text-[10px] text-gray-400 truncate mt-0.5">{c.description}</div>}
+                                    </div>
+                                  </label>
+                                  <button type="button" onClick={(e)=>{e.preventDefault(); e.stopPropagation(); onOpenDetails&&onOpenDetails(c.email)}} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" title="施設情報の詳細を見る">
+                                    <Icon name="info" size={16}/>
+                                  </button>
+                                </div>
+                              })}
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 pt-4 border-t flex justify-end">
+                <button onClick={async()=>{
+                  if(await showConfirm('このグループを削除してもよろしいですか？')) {
+                    const nm = localGroups.filter(g=>g.id !== editingGroup.id);
+                    setLocalGroups(nm);
+                    setEditingGroup(null);
+                  }
+                }} className="text-red-500 hover:text-red-700 text-sm flex items-center gap-1 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded"><Icon name="trash-2" size={16}/> このグループを削除</button>
+              </div>
+            </div>
+          ))}
+
+          {activeTab==='design'&&(
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold mb-4">デザイン設定</h3>
+              <div className="flex items-center justify-between p-4 border rounded bg-white">
+                <div><div className="font-bold">単色カレンダーカラー</div><div className="text-sm text-gray-500">イベントごとの色を無視し、カレンダーの色で統一します</div></div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" checked={useMonoColor} onChange={e=>setUseMonoColor(e.target.checked)} className="sr-only peer"/>
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div className="flex items-center justify-between p-4 border rounded bg-white">
+                <div><div className="font-bold">週表示の開始曜日</div><div className="text-sm text-gray-500">週表示カレンダーの開始曜日を選択します</div></div>
+                <select value={weekStartDay} onChange={e=>setWeekStartDay(Number(e.target.value))} className="border rounded p-2">
+                  <option value="0">日曜日</option>
+                  <option value="1">月曜日</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between p-4 border rounded bg-white">
+                <div><div className="font-bold">ヘッダーの余白 (paddingTop)</div><div className="text-sm text-gray-500">サイト埋め込み時に上部の被りを防ぐための隙間を設定します</div></div>
+                <div className="flex items-center gap-2">
+                  <input type="number" min="0" max="200" value={headerPadding} onChange={e=>setHeaderPadding(Number(e.target.value))} className="border rounded p-2 w-20 text-center"/> <span className="text-gray-600">px</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab==='team'&&(
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold mb-2">チームメンバー</h3>
+              <p className="text-sm text-gray-500 mb-4">登録したメンバーの「現在の予定」と「次の予定」がカレンダー下部にリアルタイム表示されます。最大10名まで登録できます。</p>
+              <div className="relative">
+                <div className="flex items-center gap-2 border rounded p-2 bg-white focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400">
+                  <Icon name="search" size={16} className="text-gray-400"/>
+                  <input type="text" value={teamSearchQuery} onChange={e=>{
+                    setTeamSearchQuery(e.target.value);
+                    if(e.target.value.trim()){
+                      setIsSearchingTeam(true);
+                      clearTimeout(window._teamSearchTimer);
+                      window._teamSearchTimer=setTimeout(()=>{
+                        google.script.run.withSuccessHandler(d=>{setTeamSearchResults(JSON.parse(d));setIsSearchingTeam(false)}).searchDirectoryUsers(e.target.value);
+                      },400);
+                    }else{setTeamSearchResults([]);setIsSearchingTeam(false)}
+                  }} placeholder="メンバーを検索して追加..." className="flex-1 outline-none text-sm" disabled={teamMembers.length>=10}/>
+                  {isSearchingTeam&&<div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>}
+                </div>
+                {teamSearchResults.length>0&&<div className="absolute left-0 right-0 mt-1 bg-white border rounded shadow-lg z-10 max-h-48 overflow-y-auto">
+                  {teamSearchResults.filter(r=>!teamMembers.includes(r.email)).map(r=>(
+                    <button key={r.email} onClick={()=>{
+                      if(teamMembers.length<10){setTeamMembers(prev=>[...prev,r.email]);setTeamSearchQuery('');setTeamSearchResults([])}
+                    }} className="w-full flex items-center gap-2 p-2 hover:bg-blue-50 text-sm text-left">
+                      {r.photoUrl?<img src={r.photoUrl} className="w-6 h-6 rounded-full"/>:<div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-bold">{(r.name||'?').slice(0,1)}</div>}
+                      <span className="flex-1 truncate">{r.name}</span>
+                      <span className="text-xs text-gray-400">{r.email}</span>
+                    </button>
+                  ))}
+                </div>}
+              </div>
+              {teamMembers.length===0?<div className="text-center py-8 text-gray-400 text-sm border-2 border-dashed rounded-lg">
+                <Icon name="users" size={32} className="mx-auto mb-2 opacity-50"/>
+                <p>まだメンバーが登録されていません</p>
+                <p className="text-xs mt-1">上の検索バーからメンバーを追加してください</p>
+              </div>:
+              <div className="space-y-1">
+                {teamMembers.map((em,i)=>(
+                  <div key={em} draggable
+                    onDragStart={e=>{e.dataTransfer.setData('text/plain',i.toString());e.dataTransfer.effectAllowed='move';e.currentTarget.style.opacity='0.5'}}
+                    onDragEnd={e=>{e.currentTarget.style.opacity='1'}}
+                    onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='move'}}
+                    onDrop={e=>{e.preventDefault();const from=parseInt(e.dataTransfer.getData('text/plain'));const to=i;if(from===to||isNaN(from))return;setTeamMembers(prev=>{const n=[...prev];const item=n.splice(from,1)[0];n.splice(to,0,item);return n})}}
+                    className="flex items-center gap-2 p-2 bg-gray-50 rounded border text-sm cursor-grab active:cursor-grabbing hover:border-blue-300 transition-colors">
+                    <Icon name="grip-vertical" size={14} className="text-gray-300 flex-shrink-0 cursor-grab"/>
+                    <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold flex-shrink-0">{em.split('@')[0].slice(0,2).toUpperCase()}</div>
+                    <span className="flex-1 truncate">{em}</span>
+                    <button onClick={()=>setTeamMembers(prev=>prev.filter(m=>m!==em))} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-opacity">
+                      <Icon name="x" size={14}/>
+                    </button>
+                  </div>
+                ))}
+              </div>}
+            </div>
+          )}
+          {activeTab==='data'&&(
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold mb-4">データ管理</h3>
+              <div className="p-4 border rounded bg-white space-y-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <div className="font-bold text-gray-800">キャッシュをクリア</div>
+                    <div className="text-sm text-gray-500 mt-1">予定の表示が古い場合や、追加した施設が反映されない場合にクリックしてください。<br/>グループ等の設定は保持したまま、裏側のスケジュールキャッシュを破棄して再取得します。</div>
+                  </div>
+                  <button onClick={async()=>{
+                    if(await showConfirm('キャッシュをクリアしますか？\n次回読み込み時に最新の予定が取得されます。')){
+                      setIsSaving(true);
+                      google.script.run.withSuccessHandler(()=>{
+                        idbKV.clear().then(()=>{
+                          setIsSaving(false);
+                          showAlert('キャッシュをクリアしました。ページをリロードしてください。').then(()=>window.location.reload());
+                        });
+                      }).clearServerCache();
+                    }
+                  }} disabled={isSaving} className="whitespace-nowrap px-4 py-2 bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium rounded shadow-sm text-sm">キャッシュクリア</button>
+                </div>
+                
+                <hr className="border-gray-200" />
+                
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <div className="font-bold text-red-600">初期化</div>
+                    <div className="text-sm text-gray-500 mt-1">保存されているグループ、デザイン設定、チームメンバーなど<strong className="text-red-500">すべての設定を削除</strong>し、初期状態に戻します。<br/>※この操作は取り消せません。</div>
+                  </div>
+                  <button onClick={async()=>{
+                    if(await showConfirm('本当にすべての設定を削除して初期化しますか？\n\n※自分で作成したグループなどもすべて消去されます。\n※この操作は取り消せません。')){
+                      setIsSaving(true);
+                      google.script.run.withSuccessHandler(()=>{
+                        idbKV.clear().then(()=>{
+                          setIsSaving(false);
+                          showAlert('初期化が完了しました。ページをリロードします。').then(()=>window.location.reload());
+                        });
+                      }).factoryReset();
+                    }
+                  }} disabled={isSaving} className="whitespace-nowrap px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 font-medium rounded shadow-sm text-sm">すべて初期化する</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="p-4 border-t bg-gray-50 flex justify-end gap-2">
+        <button onClick={onClose} disabled={isSaving} className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded disabled:opacity-50">キャンセル</button>
+        <button onClick={handleSave} disabled={isSaving} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
+          {isSaving&&<Icon name="loader" size={16} className="animate-spin"/>}保存して適用
+        </button>
+      </div>
+    </div>
+  </div></ModalPortal>
+};
+
+/* === MeetingView (ミーティングビュー) === */
+const MeetingView=({currentDate,resources,onEventClick,myEmail,viewMode,isLoading})=>{
+  const[now,setNow]=useState(new Date());
+  const[selectedDay,setSelectedDay]=useState(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const containerRef = useRef(null);
+  const [containerHeight, setContainerHeight] = useState(0);
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),60000);return()=>clearInterval(t)},[]);
+  useEffect(()=>{
+    if(!containerRef.current) return;
+    const observer = new ResizeObserver(entries => {
+      if(entries[0]) setContainerHeight(entries[0].contentRect.height);
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [viewMode]);
+  const maxEvents = containerHeight ? Math.max(1, Math.floor(((containerHeight - 75) / 5 - 45) / 23)) : (isMobile ? 1 : 3);
+
+  // グループメンバーのメールリスト
+  const memberEmails = useMemo(()=>resources.map(r=>r.id||r.email),[resources]);
+
+  // ミーティングイベントを抽出（参加者が2名以上で、グループメンバーが含まれるイベント）
+  const meetingEvents = useMemo(()=>{
+    const eventMap = new Map();
+    const dates = viewMode==='week' ? Array.from({length:7},(_,i)=>{const d=new Date(currentDate);d.setDate(d.getDate()-d.getDay()+i);return d}) : 
+                  viewMode==='month' ? (() => {
+                    const y=currentDate.getFullYear(),m=currentDate.getMonth();
+                    const dim=new Date(y,m+1,0).getDate();
+                    return Array.from({length:dim},(_,i)=>new Date(y,m,i+1));
+                  })() : [currentDate];
+
+    resources.forEach(r=>{
+      (r.events||[]).forEach(evt=>{
+        if(evt.isAllDay) return;
+        const evtStart = new Date(evt.start);
+        const matchesDate = dates.some(d=>evtStart.toDateString()===d.toDateString());
+        if(!matchesDate) return;
+
+        const key = evt.id || evt.title+'_'+evt.start;
+        if(!eventMap.has(key)){
+          // このイベントの全参加者（自身を含む）から人間のみ抽出（施設やグループカレンダーを除外）
+          const allParticipants = [...(evt.creators||[]),...(evt.guests||[])];
+          const humanParticipantEmails = allParticipants.map(p=>p.email).filter(Boolean).filter(e=>
+            !e.includes('resource.calendar.google.com') && 
+            !e.includes('group.calendar.google.com')
+          );
+          const uniqueParticipants = new Set(humanParticipantEmails);
+          
+          const rid = r.id || r.email;
+          if(!rid.includes('resource.calendar.google.com') && !rid.includes('group.calendar.google.com')) {
+            uniqueParticipants.add(rid);
+          }
+
+          // 参加者が2名以上か
+          const isMultiple = uniqueParticipants.size >= 2;
+
+          // 表示用にグループメンバーの参加者を抽出（こちらは施設も含めて表示）
+          const memberParticipants = memberEmails.filter(m=>
+            m===r.id || m===r.email || allParticipants.map(p=>p.email).includes(m)
+          );
+
+          eventMap.set(key, {
+            ...evt,
+            isMultiple,
+            memberParticipants: [...new Set(memberParticipants)],
+            resourceColor: r.color
+          });
+        } else {
+          // 既にあるイベントにこのリソースを参加者として追加
+          const existing = eventMap.get(key);
+          const rid = r.id || r.email;
+          if(!existing.memberParticipants.includes(rid)){
+            existing.memberParticipants.push(rid);
+          }
+        }
+      });
+    });
+
+    // 2名以上の参加者がいるイベントだけをフィルタ
+    return Array.from(eventMap.values())
+      .filter(e=>e.isMultiple)
+      .sort((a,b)=>new Date(a.start)-new Date(b.start));
+  },[resources,currentDate,memberEmails,viewMode]);
+
+  // 日表示の衝突判定とカラム計算
+  const dayMeetingEvents = useMemo(() => {
+    if(viewMode!=='day') return meetingEvents;
+    const sorted = [...meetingEvents];
+    let groups = [];
+    let currentGroup = [];
+    let groupEnd = new Date(0);
+
+    sorted.forEach(evt => {
+      const start = new Date(evt.start);
+      if (start >= groupEnd) {
+        if (currentGroup.length > 0) groups.push(currentGroup);
+        currentGroup = [evt];
+        groupEnd = new Date(evt.end);
+      } else {
+        currentGroup.push(evt);
+        if (new Date(evt.end) > groupEnd) groupEnd = new Date(evt.end);
+      }
+    });
+    if (currentGroup.length > 0) groups.push(currentGroup);
+
+    groups.forEach(group => {
+      const cols = [];
+      group.forEach(evt => {
+        let placed = false;
+        for (let i = 0; i < cols.length; i++) {
+          const lastEvt = cols[i][cols[i].length - 1];
+          if (new Date(lastEvt.end) <= new Date(evt.start)) {
+            cols[i].push(evt);
+            evt._col = i;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          evt._col = cols.length;
+          cols.push([evt]);
+        }
+      });
+      group.forEach(evt => {
+        evt._maxCols = cols.length;
+      });
+    });
+    return sorted;
+  }, [meetingEvents, viewMode]);
+
+  // 時間範囲を算出
+  const timeRange = useMemo(()=>{
+    let min=8,max=19;
+    meetingEvents.forEach(e=>{
+      const s=new Date(e.start),ed=new Date(e.end);
+      const sh=s.getHours(),eh=ed.getHours()+(ed.getMinutes()>0?1:0);
+      if(sh<min)min=sh;if(eh>max)max=Math.min(24,eh);
+    });
+    return{start:min,end:max};
+  },[meetingEvents]);
+
+  const totalHours = timeRange.end - timeRange.start;
+  const hours = Array.from({length:totalHours},(_,i)=>i+timeRange.start);
+  const isToday = now.toDateString()===currentDate.toDateString();
+  const currentHour = now.getHours()+now.getMinutes()/60;
+  const showRedLine = isToday && currentHour>=timeRange.start && currentHour<=timeRange.end;
+
+  // リソース情報のルックアップ
+  const getResourceInfo=(email)=>{
+    const r = resources.find(res=>(res.id||res.email)===email);
+    return r || {name:email.split('@')[0], photoUrl:null, color:'#4285F4'};
+  };
+
+  if(viewMode==='week'){
+    const dates = Array.from({length:7},(_,i)=>{const d=new Date(currentDate);d.setDate(d.getDate()-d.getDay()+i);return d});
+    const eventsByDate = {};
+    dates.forEach(d=>{
+      const ds = d.toDateString();
+      eventsByDate[ds] = meetingEvents.filter(e=>new Date(e.start).toDateString()===ds);
+    });
+
+    return <div ref={containerRef} className="flex-1 flex flex-col h-full bg-white overflow-hidden relative">
+      {isLoading&&<div className="absolute inset-0 bg-white/50 z-50 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div></div>}
+      <div className="p-3 bg-gradient-to-r from-purple-50 to-blue-50 border-b flex items-center gap-2 flex-shrink-0">
+        <Icon name="users" size={16} className="text-purple-600"/>
+        <span className="text-sm font-bold text-purple-800">ミーティングビュー (週)</span>
+      </div>
+      <div className="flex-1 overflow-auto custom-scrollbar flex flex-col">
+        <div className="grid grid-cols-7 border-b bg-gray-50 text-center font-bold text-sm py-2 sticky top-0 z-10 flex-shrink-0">
+          {dates.map((d,i)=>{
+            const isT=d.toDateString()===new Date().toDateString();
+            return <div key={i} className={`${isT?'text-blue-600':'text-gray-700'}`}>{d.getDate()} ({['日','月','火','水','木','金','土'][d.getDay()]})</div>
+          })}
+        </div>
+        <div className="grid grid-cols-7 flex-1 min-h-[400px]">
+          {dates.map((d,i)=>{
+            const ds = d.toDateString();
+            const dayMeetings = eventsByDate[ds]||[];
+            return <div key={i} className="border-r p-2 space-y-2">
+              {dayMeetings.length===0 && <div className="text-xs text-gray-300 text-center mt-4">ミーティングなし</div>}
+              {dayMeetings.map((evt,eIdx)=>{
+                const st=new Date(evt.start),ed=new Date(evt.end);
+                const c = evt.color || '#4285F4';
+                return <div key={evt.id||eIdx} onClick={()=>onEventClick(evt)} className="p-1.5 sm:p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5" style={{borderLeftColor:c,borderLeftWidth:'3px', backgroundColor:c+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
+                  {/* Mobile Layout */}
+                  <div className="sm:hidden flex flex-col gap-1.5">
+                    <div className="flex items-center gap-1.5 overflow-hidden">
+                      <div className="text-[10px] font-bold text-gray-800 truncate leading-tight flex-shrink-0 max-w-full">{evt.title||'(タイトルなし)'}</div>
+                      <div className="text-[8px] text-gray-500 font-bold truncate leading-none min-w-0">{st.getHours()}:{String(st.getMinutes()).padStart(2,'0')} - {ed.getHours()}:{String(ed.getMinutes()).padStart(2,'0')}</div>
+                    </div>
+                    <div className="flex items-center -space-x-1 overflow-hidden">
+                      {evt.memberParticipants.slice(0,6).map(email=>{
+                        const info = getResourceInfo(email);
+                        return info.photoUrl ?
+                          <img key={email} src={info.photoUrl} className="w-3.5 h-3.5 rounded-full object-cover border border-white shadow-sm flex-shrink-0" title={info.name}/> :
+                          <div key={email} className="w-3.5 h-3.5 rounded-full text-white flex items-center justify-center text-[7px] font-bold border border-white shadow-sm flex-shrink-0" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                      })}
+                      {evt.memberParticipants.length>6 && <div className="w-3.5 h-3.5 rounded-full bg-black/30 border border-white flex items-center justify-center text-[7px] text-white shadow-sm flex-shrink-0">+{evt.memberParticipants.length-6}</div>}
+                    </div>
+                  </div>
+                  {/* Desktop Layout */}
+                  <div className="hidden sm:flex flex-col gap-1.5">
+                    <div className="text-xs font-bold text-gray-800 truncate leading-tight">{evt.title||'(タイトルなし)'}</div>
+                    <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+                      <div className="text-[9px] text-gray-500 font-bold whitespace-nowrap">{st.getHours()}:{String(st.getMinutes()).padStart(2,'0')} - {ed.getHours()}:{String(ed.getMinutes()).padStart(2,'0')}</div>
+                      <div className="flex items-center -space-x-1">
+                        {evt.memberParticipants.slice(0,6).map(email=>{
+                          const info = getResourceInfo(email);
+                          return info.photoUrl ?
+                            <img key={email} src={info.photoUrl} className="w-4 h-4 rounded-full object-cover border border-white shadow-sm" title={info.name}/> :
+                            <div key={email} className="w-4 h-4 rounded-full text-white flex items-center justify-center text-[7px] font-bold border border-white shadow-sm" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                        })}
+                        {evt.memberParticipants.length>6 && <div className="w-4 h-4 rounded-full bg-black/30 border border-white flex items-center justify-center text-[7px] text-white shadow-sm">+{evt.memberParticipants.length-6}</div>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              })}
+            </div>
+          })}
+        </div>
+      </div>
+    </div>
+  }
+
+  if(viewMode==='month'){
+    const y=currentDate.getFullYear(),m=currentDate.getMonth();
+    const fd=new Date(y,m,1).getDay(),dim=new Date(y,m+1,0).getDate();
+    const days=[];for(let i=0;i<fd;i++)days.push(null);for(let i=1;i<=dim;i++)days.push(new Date(y,m,i));
+    const weekRows = Math.ceil(days.length / 7);
+    const cellHeight = (containerHeight - 68) / weekRows;
+    const meetingMaxEvents = containerHeight ? Math.max(0, Math.floor((cellHeight - 51) / 27)) : (isMobile ? 1 : 2);
+    
+    return <div ref={containerRef} className="flex-1 flex flex-col h-full bg-white relative">
+      <div className="p-2 bg-gradient-to-r from-purple-50 to-blue-50 border-b flex items-center gap-2 flex-shrink-0">
+        <Icon name="users" size={16} className="text-purple-600"/>
+        <span className="text-sm font-bold text-purple-800">ミーティングビュー (月)</span>
+      </div>
+      <div className="grid grid-cols-7 border-b bg-gray-50 text-center font-bold text-sm py-2">
+        <div className="text-red-500">日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div className="text-blue-500">土</div>
+      </div>
+      <div className={`flex-1 grid grid-cols-7 min-h-0`} style={{gridTemplateRows: `repeat(${weekRows}, 1fr)`}}>
+        {days.map((d,i)=>{
+          if(!d) return <div key={i} className="border-r border-b bg-gray-50 p-1 min-h-0"></div>;
+          const ds = d.toDateString();
+          const dayMeetings = meetingEvents.filter(e=>new Date(e.start).toDateString()===ds);
+          return <div key={i} className="border-r border-b p-1 flex flex-col overflow-hidden hover:bg-gray-50 cursor-pointer min-h-0" onClick={()=>d&&setSelectedDay(d)}>
+            <div className={`text-right text-xs font-bold p-1 ${ds===new Date().toDateString()?'text-blue-600':''}`}>{d.getDate()}</div>
+            <div className="flex-1 overflow-hidden space-y-1 pr-1 flex flex-col">
+              {dayMeetings.slice(0,meetingMaxEvents).map((evt,idx)=>{
+                 const st=new Date(evt.start);
+                 const timeStr=evt.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} `;
+                 const c = evt.color || evt.resourceColor || '#4285F4';
+                 return <div key={evt.id||idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 shadow-sm flex items-center gap-1 border-l-4" style={{borderLeftColor:c, backgroundColor:c+'1A', color:'#333'}}>
+                   <div className="truncate flex-1 font-bold">{isMobile ? <>{evt.title||'(タイトルなし)'}{timeStr && ` ${timeStr.trim()}`}</> : <>{timeStr}{evt.title||'(タイトルなし)'}</>}</div>
+                   <div className="flex -space-x-1 flex-shrink-0 ml-1">
+                     {evt.memberParticipants.slice(0,3).map(email=>{
+                        const info = getResourceInfo(email);
+                        return info.photoUrl ? <img key={email} src={info.photoUrl} className="w-3 h-3 rounded-full border border-white object-cover" title={info.name}/> : <div key={email} className="w-3 h-3 rounded-full border border-white text-white flex items-center justify-center text-[6px] font-bold" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                     })}
+                     {evt.memberParticipants.length>3 && <div className="w-3 h-3 rounded-full bg-black/30 border border-white flex items-center justify-center text-[6px] text-white">+{evt.memberParticipants.length-3}</div>}
+                   </div>
+                 </div>
+              })}
+              {dayMeetings.length > meetingMaxEvents && (
+                 <div onClick={(ev)=>{ev.stopPropagation();setSelectedDay(d)}} className="text-[10px] text-gray-500 font-bold hover:bg-gray-100 cursor-pointer rounded text-center py-0.5 mt-auto flex-shrink-0">
+                   + 他 {dayMeetings.length - meetingMaxEvents} 件
+                 </div>
+              )}
+            </div>
+          </div>
+        })}
+      </div>
+      <DayDetailsModal isOpen={!!selectedDay} date={selectedDay} events={selectedDay ? meetingEvents.filter(e=>new Date(e.start).toDateString()===selectedDay.toDateString()).map(e=>({...e, participantInfos: e.memberParticipants.map(email => getResourceInfo(email))})) : []} onClose={()=>setSelectedDay(null)} onEventClick={onEventClick} myEmail={myEmail} isMeetingView={true}/>
+    </div>
+  }
+
+  // 日表示
+  return <div ref={containerRef} className="flex-1 flex flex-col h-full bg-white overflow-hidden relative">
+    {isLoading&&<div className="absolute inset-0 bg-white/50 z-50 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div></div>}
+    <div className="p-3 bg-gradient-to-r from-purple-50 to-blue-50 border-b flex items-center gap-2 flex-shrink-0">
+      <Icon name="users" size={16} className="text-purple-600"/>
+      <span className="text-sm font-bold text-purple-800">ミーティングビュー (日)</span>
+      <span className="text-xs text-gray-500">({meetingEvents.length}件)</span>
+    </div>
+    <div className="flex-1 overflow-auto custom-scrollbar">
+      {meetingEvents.length===0 ? (
+        <div className="flex flex-col items-center justify-center h-full text-gray-400">
+          <Icon name="calendar" size={48} className="opacity-30 mb-3"/>
+          <p className="text-sm">本日のグループミーティングはありません</p>
+        </div>
+      ) : (
+        <div className="relative" style={{minHeight:totalHours*60+'px'}}>
+          {/* 時間軸ラベル */}
+          {hours.map(h=>(
+            <div key={h} className="absolute left-0 w-16 text-right pr-2 text-xs text-gray-400 font-medium" style={{top:(h-timeRange.start)*60+'px'}}>{h}:00</div>
+          ))}
+          {/* 時間グリッド線 */}
+          {hours.map(h=>(
+            <div key={'line_'+h} className="absolute left-16 right-0 border-t border-gray-100" style={{top:(h-timeRange.start)*60+'px'}}></div>
+          ))}
+          {/* 現在時刻ライン */}
+          {showRedLine && <div className="absolute left-16 right-0 border-t-2 border-red-500 z-30 pointer-events-none" style={{top:((currentHour-timeRange.start)*60)+'px'}}>
+            <div className="absolute -left-1 -top-1.5 w-3 h-3 bg-red-500 rounded-full"></div>
+          </div>}
+          {/* ミーティングイベントコンテナ */}
+          <div className="absolute top-0 bottom-0 left-16 right-4">
+            {dayMeetingEvents.map((evt,idx)=>{
+              const s=new Date(evt.start),e=new Date(evt.end);
+              const sMin=(s.getHours()-timeRange.start)*60+s.getMinutes();
+              const eMin=(e.getHours()-timeRange.start)*60+e.getMinutes();
+              if(eMin<=0||sMin>=totalHours*60)return null;
+              
+              const top=Math.max(0,sMin);
+              const height=Math.max(30,Math.min(totalHours*60,eMin)-top);
+              const isShort = height < 45;
+              const isLong = height > 60;
+              const maxCols = evt._maxCols || 1;
+              const colIdx = evt._col || 0;
+              
+              return <div key={evt.id||idx} onClick={()=>onEventClick(evt)}
+                className="absolute rounded-lg shadow-sm cursor-pointer hover:shadow-md transition-shadow overflow-hidden border"
+                style={{
+                  top: top+'px',
+                  height: height+'px',
+                  left: `${(colIdx / maxCols) * 100}%`,
+                  width: `calc(${(1 / maxCols) * 100}% - ${maxCols > 1 ? '4px' : '0px'})`,
+                  borderLeftColor: evt.color||'#4285F4',
+                  borderLeftWidth: '4px',
+                  backgroundColor: (evt.color||'#4285F4') + '1A',
+                  borderColor: 'rgba(0,0,0,0.08)'
+                }}>
+                <div className={`p-1 h-full flex ${isShort ? 'flex-row items-center gap-1.5 overflow-hidden' : 'flex-col'}`}>
+                  {isShort ? (
+                    <>
+                      <div className="flex-1 min-w-0 flex items-center gap-2">
+                        <div className="text-[13px] font-normal text-gray-800 truncate flex-shrink-0" style={{maxWidth: '60%'}}>{evt.title||'(タイトルなし)'}</div>
+                        <div className="flex items-center -space-x-1 flex-shrink-0 overflow-hidden">
+                          {evt.memberParticipants.map(email=>{
+                            const info = getResourceInfo(email);
+                            return info.photoUrl ?
+                                <img key={email} src={info.photoUrl} className="w-4 h-4 rounded-full object-cover border border-white shadow-sm flex-shrink-0" title={info.name}/> :
+                                <div key={email} className="w-4 h-4 text-[7px] rounded-full text-white flex items-center justify-center font-bold border border-white shadow-sm flex-shrink-0" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                          })}
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-gray-500 flex-shrink-0 ml-auto">{s.getHours()}:{String(s.getMinutes()).padStart(2,'0')} - {e.getHours()}:{String(e.getMinutes()).padStart(2,'0')}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-0.5 gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <div className="text-[13px] font-normal text-gray-800 truncate leading-tight flex-shrink">{evt.title||'(タイトルなし)'}</div>
+                          {!isLong && evt.location && <div className="text-[9px] text-gray-400 truncate flex-shrink min-w-[40px] flex items-center gap-0.5 leading-none"><Icon name="map-pin" size={8} className="flex-shrink-0"/>{evt.location}</div>}
+                        </div>
+                        <div className="text-[9px] text-gray-500 flex-shrink-0 leading-none">{s.getHours()}:{String(s.getMinutes()).padStart(2,'0')} - {e.getHours()}:{String(e.getMinutes()).padStart(2,'0')}</div>
+                      </div>
+                      {isLong && evt.location && <div className="text-[9px] text-gray-400 truncate mt-0.5 flex items-center gap-0.5 leading-none mb-0.5"><Icon name="map-pin" size={8} className="flex-shrink-0"/>{evt.location}</div>}
+                      <div className="flex items-center mt-auto -space-x-1 overflow-hidden pt-0.5">
+                        {evt.memberParticipants.map(email=>{
+                          const info = getResourceInfo(email);
+                          return info.photoUrl ?
+                              <img key={email} src={info.photoUrl} className="w-4 h-4 rounded-full object-cover border border-white shadow-sm flex-shrink-0" title={info.name}/> :
+                              <div key={email} className="w-4 h-4 text-[7px] rounded-full text-white flex items-center justify-center font-bold border border-white shadow-sm flex-shrink-0" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+};
+
+/* === DayDetailsModal === */
+const DayDetailsModal = ({isOpen, date, events, onClose, onEventClick, myEmail, isMeetingView}) => {
+  if (!isOpen || !date) return null;
+  return <ModalPortal>
+    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg flex flex-col max-h-[80vh] overflow-hidden" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+          <h2 className="text-lg font-bold text-gray-800">{date.toLocaleDateString('ja-JP', {month:'long', day:'numeric', weekday:'short'})} の予定</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full"><Icon name="x"/></button>
+        </div>
+        <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
+          {events.length === 0 ? <div className="text-gray-500 text-center py-4">予定はありません</div> : 
+           events.map((e, idx) => {
+             const st = new Date(e.start), ed = new Date(e.end);
+             const timeStr = e.isAllDay ? '終日' : `${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} - ${ed.getHours()}:${String(ed.getMinutes()).padStart(2,'0')}`;
+             
+             if (isMeetingView) {
+               return <div key={idx} onClick={()=>{onEventClick(e)}} className="p-2 rounded-lg border cursor-pointer hover:shadow-md transition-shadow shadow-sm flex flex-col gap-1.5" style={{borderLeftColor:e.color||e.resourceColor||'#4285F4',borderLeftWidth:'3px', backgroundColor:(e.color||e.resourceColor||'#4285F4')+'1A', borderColor:'rgba(0,0,0,0.08)'}}>
+                  <div className="text-xs font-bold text-gray-800 truncate leading-tight">{e.title||'(タイトルなし)'}</div>
+                  <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+                    <div className="flex items-center -space-x-1">
+                      {(e.participantInfos||[]).slice(0,6).map((info, i)=>{
+                        return info.photoUrl ?
+                          <img key={i} src={info.photoUrl} className="w-4 h-4 rounded-full object-cover border border-white shadow-sm" title={info.name}/> :
+                          <div key={i} className="w-4 h-4 rounded-full text-white flex items-center justify-center text-[7px] font-bold border border-white shadow-sm" style={{backgroundColor:info.color||'#4285F4'}} title={info.name}>{(info.name||'?').slice(0,1)}</div>
+                      })}
+                      {(e.participantInfos||[]).length>6 && <div className="w-4 h-4 rounded-full bg-black/30 border border-white flex items-center justify-center text-[7px] text-white shadow-sm">+{(e.participantInfos||[]).length-6}</div>}
+                    </div>
+                    <div className="text-[9px] text-gray-500 font-bold whitespace-nowrap">{timeStr}</div>
+                  </div>
+                </div>
+             }
+
+             const isFacility = e.resourceEmail && (e.resourceEmail.includes('resource.calendar.google.com') || e.resourceEmail.includes('group.calendar.google.com'));
+             return <div key={idx} onClick={()=>{onEventClick(e)}} className="flex items-center gap-3 p-2 rounded border hover:bg-gray-50 cursor-pointer transition-colors shadow-sm" style={{borderLeftColor: e.resourceColor||'#4285F4', borderLeftWidth: '4px'}}>
+               <div className="w-14 flex-shrink-0 text-xs font-bold text-gray-600 text-center">{timeStr}</div>
+               <div className="flex-1 min-w-0">
+                 <div className="font-bold text-sm text-gray-800 truncate">{e.title || '(タイトルなし)'}</div>
+                 <div className="text-[10px] text-gray-500 truncate flex items-center gap-1 mt-0.5">
+                   {e.resourcePhotoUrl ? <img src={e.resourcePhotoUrl} className="w-4 h-4 rounded-full object-cover flex-shrink-0"/> :
+                   <div className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white flex-shrink-0" style={{backgroundColor: e.resourceColor||'#4285F4'}}>
+                     {isFacility ? <Icon name="building" size={8}/> : (e.resourceName||'?').slice(0,1)}
+                   </div>}
+                   {e.resourceName}
+                 </div>
+               </div>
+             </div>
+           })
+          }
+        </div>
+      </div>
+    </div>
+  </ModalPortal>
+};
+
+/* === MonthView === */
+const MonthView=({currentDate,resources,onEventClick,myEmail,groupId})=>{
+  const y=currentDate.getFullYear(),m=currentDate.getMonth();
+  const fd=new Date(y,m,1).getDay(),dim=new Date(y,m+1,0).getDate();
+  const days=[];for(let i=0;i<fd;i++)days.push(null);for(let i=1;i<=dim;i++)days.push(new Date(y,m,i));
+  const weekRows = Math.ceil(days.length / 7);
+  const[eventsByDay,setEventsByDay]=useState({});
+  const[selectedDay,setSelectedDay]=useState(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const containerRef = useRef(null);
+  const [containerHeight, setContainerHeight] = useState(0);
+
+  useEffect(()=>{
+    if(!containerRef.current) return;
+    const observer = new ResizeObserver(entries => {
+      if(entries[0]) setContainerHeight(entries[0].contentRect.height);
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  const cellHeight = (containerHeight - 36) / weekRows;
+  const maxEvents = containerHeight ? Math.max(0, Math.floor((cellHeight - 51) / 27)) : (isMobile ? 1 : 2);
+
+  useEffect(()=>{
+    const map={};
+    days.forEach(d=>{
+      if(!d)return;
+      const ds=d.toDateString();map[ds]=[];
+      resources.forEach(r=>{
+        (r.events||[]).forEach(e=>{
+          const es=new Date(e.start),ee=new Date(e.end);
+          es.setHours(0,0,0,0);if(!e.isAllDay)ee.setHours(23,59,59,999);
+          if(d>=es&&d<=ee)map[ds].push({...e,resourceColor:r.color,resourceName:r.name,resourceEmail:r.email||r.id,resourcePhotoUrl:r.photoUrl});
+        });
+      });
+      map[ds].sort((a,b)=>new Date(a.start)-new Date(b.start));
+    });
+    setEventsByDay(map);
+  },[currentDate,resources]);
+
+  return <div ref={containerRef} className="flex-1 flex flex-col h-full bg-white relative">
+    <div className="grid grid-cols-7 border-b bg-gray-50 text-center font-bold text-sm py-2">
+      <div className="text-red-500">日</div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div className="text-blue-500">土</div>
+    </div>
+    <div className={`flex-1 grid grid-cols-7 min-h-0`} style={{gridTemplateRows: `repeat(${weekRows}, 1fr)`}}>
+      {days.map((d,i)=><div key={i} className={`border-r border-b p-1 flex flex-col overflow-hidden ${!d?'bg-gray-50':''}`} onClick={()=>d&&setSelectedDay(d)}>
+        {d&&<>
+          <div className={`text-right text-xs font-bold p-1 ${d.toDateString()===new Date().toDateString()?'text-blue-600':''}`}>{d.getDate()}</div>
+          <div className="flex-1 overflow-hidden space-y-1 pr-1 flex flex-col">
+            {(eventsByDay[d.toDateString()]||[]).slice(0,maxEvents).map((e,idx)=>{
+               const st=new Date(e.start);
+               const timeStr=e.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} `;
+               const isFacility = e.resourceEmail && (e.resourceEmail.includes('resource.calendar.google.com') || e.resourceEmail.includes('group.calendar.google.com'));
+               return <div key={idx} onClick={(ev)=>{ev.stopPropagation();onEventClick(e)}} className="text-[10px] p-1 rounded truncate cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center justify-between" style={{backgroundColor:e.resourceColor||'#4285F4'}}>
+                 <div className="truncate flex-1">{isMobile ? <>{e.title||'(タイトルなし)'}{timeStr && ` ${timeStr.trim()}`}</> : <>{timeStr}{e.title||'(タイトルなし)'}</>}</div>
+                 {e.resourcePhotoUrl ? <img src={e.resourcePhotoUrl} className="w-3 h-3 rounded-full ml-1 flex-shrink-0 object-cover"/> : 
+                 <div className="w-3 h-3 rounded-full bg-white/30 flex items-center justify-center text-[7px] font-bold ml-1 flex-shrink-0">
+                   {isFacility ? <Icon name="building" size={6}/> : (e.resourceName||'?').slice(0,1)}
+                 </div>}
+               </div>
+            })}
+            {(eventsByDay[d.toDateString()]||[]).length > maxEvents && (
+               <div onClick={(ev)=>{ev.stopPropagation();setSelectedDay(d)}} className="text-[10px] text-gray-500 font-bold hover:bg-gray-100 cursor-pointer rounded text-center py-0.5 mt-auto flex-shrink-0">
+                 + 他 {(eventsByDay[d.toDateString()]).length - maxEvents} 件
+               </div>
+            )}
+          </div>
+        </>}
+      </div>)}
+    </div>
+    <DayDetailsModal isOpen={!!selectedDay} date={selectedDay} events={selectedDay ? eventsByDay[selectedDay.toDateString()]||[] : []} onClose={()=>setSelectedDay(null)} onEventClick={onEventClick} myEmail={myEmail}/>
+  </div>
+};
+
+/* === V1ClassicDayView: V1の日表示を完全移植 === */
+const V1ClassicDayView=({currentDate,resources,onEventClick,onCellClick,myEmail,isLoading,sidebarWidth,onSidebarResize,settings,timeRange,onResourceClick})=>{
+  const[hoverEvent,setHoverEvent]=useState(null);const[ttPos,setTtPos]=useState(null);
+  const[now,setNow]=useState(new Date());
+  const useMono=settings?.useMonoColor;
+  const isResizing=useRef(false);
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),60000);return()=>clearInterval(t)},[]);
+
+  // リサイズ機能（V1完全移植）
+  const startResizing=useCallback(e=>{e.preventDefault();isResizing.current=true},[]);
+  const stopResizing=useCallback(()=>{isResizing.current=false},[]);
+  const resize=useCallback(e=>{if(isResizing.current&&onSidebarResize){const w=e.clientX;if(w>75&&w<500)onSidebarResize(w)}},[onSidebarResize]);
+  useEffect(()=>{window.addEventListener('mousemove',resize);window.addEventListener('mouseup',stopResizing);return()=>{window.removeEventListener('mousemove',resize);window.removeEventListener('mouseup',stopResizing)}},[resize,stopResizing]);
+
+  const startHour=timeRange?timeRange.start:8,endHour=timeRange?timeRange.end:19,totalHours=endHour-startHour+1;
+  const hours=Array.from({length:totalHours},(_,i)=>i+startHour);
+  const currentHour=now.getHours()+now.getMinutes()/60;
+  const isToday=now.toDateString()===currentDate.toDateString();
+  const showRedLine=isToday&&currentHour>=startHour&&currentHour<=(endHour+1);
+  const redLineLeft=((currentHour-startHour)/totalHours)*100;
+  const hasAllDayEvents=resources.some(r=>(r.events||[]).some(e=>e.isAllDay&&new Date(e.start).toDateString()===currentDate.toDateString()));
+  const isMe=id=>id===myEmail;
+
+  // V1と同一のイベントスタイル（useMono対応、辞退対応）
+  const getEvtStyle=(evt,resourceId,resourceColor)=>{
+    const isDeclined=evt.guests?.some(g=>g.email===resourceId&&g.status==='NO');
+    const isMyEvent = resourceId === myEmail;
+    const baseColor=(useMono && !isMyEvent)?adjustColorHsl(resourceColor||'#4285F4'):(evt.color||'#4285F4');
+    if(isDeclined)return{style:{backgroundColor:'#fff',border:`2px solid ${baseColor}`,color:baseColor,fontWeight:'bold',zIndex:20},cls:'line-through'};
+    return{style:{backgroundColor:adjustColorHsl(baseColor)},cls:'text-white'};
+  };
+  const getTimeLabel=evt=>{
+    const s=new Date(evt.start),e=new Date(evt.end);const t={hour:'2-digit',minute:'2-digit'};
+    if(s.toDateString()===e.toDateString())return`${s.toLocaleTimeString([],t)} - ${e.toLocaleTimeString([],t)}`;
+    const d={month:'numeric',day:'numeric',...t};
+    return`${s.toLocaleDateString('ja-JP',d)} - ${e.toLocaleDateString('ja-JP',d)}`;
+  };
+
+  return <div className="flex flex-col h-full overflow-hidden relative">
+    {isLoading&&<div className="absolute inset-0 z-[500] bg-gray-50/80 backdrop-blur-[1px] flex flex-col items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-4"></div><div className="text-gray-600 font-bold text-sm bg-white/90 px-6 py-2 rounded-full shadow-md">スケジュール取得中...</div></div>}
+    <div className="flex-1 flex flex-col overflow-auto custom-scrollbar relative">
+      {/* ヘッダー行 */}
+      <div className="flex border-b bg-gray-50 sticky top-0 z-[60] min-w-[800px]">
+        <div className="flex-shrink-0 border-r bg-gray-100 sticky left-0 z-[60] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] relative" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+            <div className="flex items-end gap-1">
+              <span className="text-2xl font-bold text-gray-500 leading-none">{currentDate.getDate()}</span>
+              <span className="text-xs font-bold text-gray-400 mb-0.5">{currentDate.toLocaleDateString('ja-JP',{weekday:'short'}).replace(/[()（）]/g,'')}</span>
+            </div>
+          </div>
+          {/* リサイズハンドル */}
+          <div className="resizer-handle" onMouseDown={startResizing}><div className="resizer-bar"></div></div>
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <div className="flex h-full w-full relative">
+            {hasAllDayEvents&&<div className="w-16 flex-shrink-0 border-r bg-gray-100 flex-none flex items-center justify-center pt-1"><span className="text-[10px] text-gray-500 font-bold">終日</span></div>}
+            <div className="flex-1 flex relative">
+              {hours.map(h=><div key={h} className="flex-1 min-w-0 border-r py-2 text-center text-sm text-gray-500 relative overflow-hidden">{h}<span className="hidden md:inline">:00</span></div>)}
+              {showRedLine&&<div className="absolute top-0 bottom-0 z-50 border-r-2 border-red-500 transform -translate-x-1/2 pointer-events-none" style={{left:`${redLineLeft}%`}}></div>}
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* リソース行 */}
+      <div className="min-w-[800px] relative">
+        {resources.map(resource=>{
+          const isSep = resource.id.startsWith('_SEP_');
+          if (isSep) {
+             const label = resource.id.split(':').slice(2).join(':') || '';
+             return <div key={resource.id} className="flex h-[24px] relative items-center bg-gray-100 border-b shadow-inner">
+               <div className="flex-shrink-0 px-3 sticky left-0 z-40 bg-gray-100 border-r h-full flex items-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+                 <span className="text-[11px] font-bold text-gray-500 truncate">{label}</span>
+               </div>
+               <div className="flex-1 w-full h-full"></div>
+             </div>;
+          }
+          // コンパクトモード判定（V1と同一）
+          const isCompact=sidebarWidth<90;
+          const textOvf=isCompact?'overflow-hidden whitespace-nowrap':'truncate';
+          return <div key={resource.id} className="flex border-b min-h-[120px] transition-colors hover:bg-gray-50">
+          <div className="flex-shrink-0 p-3 border-r flex items-center bg-white sticky left-0 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer hover:bg-gray-100 transition-colors group" style={{width:sidebarWidth,minWidth:sidebarWidth}} onClick={()=>onResourceClick&&onResourceClick(resource.id)}>
+            <div className={`flex overflow-hidden w-full ${isCompact?'flex-col justify-center items-center py-1 px-0.5 gap-0':'flex-row items-center px-2 gap-2'}`}>
+              {resource.photoUrl?<img src={resource.photoUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0 object-cover group-hover:opacity-80 transition-opacity"/>:
+              <div className="w-8 h-8 rounded-full text-white flex items-center justify-center text-xs font-bold select-none flex-shrink-0 group-hover:opacity-80 transition-opacity" style={{backgroundColor:adjustColorHsl(resource.color||'#4285F4')}}>{resource.name?resource.name.slice(0,2).toUpperCase():'?'}</div>}
+              <div className={`overflow-hidden min-w-0 ${isCompact?'w-full text-center mt-1':'flex-1 text-left'}`}>
+                <div className={`text-sm font-medium text-gray-800 select-none leading-tight group-hover:text-blue-600 transition-colors ${textOvf}`} title={resource.email||resource.id}>{resource.name}</div>
+                <div className={`text-[10px] text-gray-500 select-none leading-tight ${textOvf}`}>{resource.email||resource.id}</div>
+              </div>
+            </div>
+          </div>
+          <div className={`flex-1 relative w-full ${!isMe(resource.id)?'bg-gray-50/30':''}`}>
+            <div className="flex relative h-full w-full">
+            {(()=>{
+              const dStart=new Date(currentDate);dStart.setHours(0,0,0,0);
+              const dEnd=new Date(currentDate);dEnd.setHours(23,59,59,999);
+              return <>
+                {hasAllDayEvents&&<div className="w-16 flex-shrink-0 border-r bg-gray-50 p-1 space-y-1 overflow-y-auto flex-none">
+                  {(resource.events||[]).filter(e=>e.isAllDay&&new Date(e.start)<dEnd&&new Date(e.end)>dStart).map(evt=>{
+                    const{style,cls}=getEvtStyle(evt,resource.id,resource.color);
+                    return <div key={evt.id} onClick={e=>{e.stopPropagation();onEventClick(evt)}} onMouseEnter={e=>{setHoverEvent(evt);setTtPos({x:e.clientX,y:e.clientY})}} onMouseLeave={()=>setHoverEvent(null)} className={`p-1 rounded text-[10px] shadow-sm cursor-pointer hover:opacity-90 truncate ${cls}`} style={style} title={evt.title||'終日予定'}>{evt.title||'終日予定'}</div>
+                  })}
+                </div>}
+                <div className="flex-1 flex relative">
+                  {hours.map(h=><div key={h} className={`flex-1 min-w-0 border-r h-full last:border-r-0 grid-cell ${isMe(resource.id)?'cursor-pointer':'cursor-default'} relative`} onClick={e=>{
+                    const rect=e.currentTarget.getBoundingClientRect();const x=e.clientX-rect.left;const half=x>(rect.width/2);
+                    const ct=new Date(currentDate);ct.setHours(h,half?30:0,0,0);onCellClick(resource.id,ct.toISOString());
+                  }}><div className="absolute h-full border-l border-gray-100 left-1/2 pointer-events-none"></div></div>)}
+                  {showRedLine&&<div className="absolute top-0 bottom-0 z-30 border-r-2 border-red-500 transform -translate-x-1/2 pointer-events-none" style={{left:`${redLineLeft}%`}}></div>}
+                  <div className="absolute inset-0 pointer-events-none z-10">
+                    {(()=>{
+                      const sorted=(resource.events||[]).filter(e=>{
+                        if(e.isAllDay)return false;const eS=new Date(e.start),eE=new Date(e.end);return eS<dEnd&&eE>dStart;
+                      }).sort((a,b)=>{const d=new Date(a.start)-new Date(b.start);return d!==0?d:new Date(b.end)-new Date(a.end)});
+                      const lanes=[];
+                      return sorted.map(evt=>{
+                        const s=new Date(evt.start),e=new Date(evt.end);const bd=new Date(currentDate);bd.setHours(0,0,0,0);
+                        let sH=(s-bd)/3600000,eH=(e-bd)/3600000;
+                        if(eH<=startHour||sH>=(endHour+1))return null;
+                        if((eH-sH)<0.5){sH=Math.floor(sH*2)/2;eH=sH+0.5}
+                        if(sH<startHour)sH=startHour;if(eH>(endHour+1))eH=endHour+1;
+                        let dur=eH-sH;if(dur<0.1)dur=0.1;
+                        const left=((sH-startHour)/totalHours)*100,width=(dur/totalHours)*100;
+                        let li=-1;for(let l=0;l<lanes.length;l++){if(lanes[l]<=new Date(evt.start)){li=l;break}}
+                        if(li===-1){li=lanes.length;lanes.push(new Date(evt.end))}else{lanes[li]=new Date(evt.end)}
+                        const bs=24,cs=5,th=3;let it;
+                        if(li<=th){it=2+(li*bs)}else{it=2+(th*bs)+((li-th)*cs)}
+                        if(it>96){const ov=Math.min((li-th),10);it=96+(ov*1);if(it>108)it=108}
+                        const{style,cls}=getEvtStyle(evt,resource.id,resource.color);const isW=width>20;
+                        return <div key={evt.id} onClick={e=>{e.stopPropagation();setHoverEvent(null);onEventClick(evt)}} onMouseEnter={e=>{setHoverEvent(evt);setTtPos({x:e.clientX,y:e.clientY})}} onMouseLeave={()=>setHoverEvent(null)} className={`absolute rounded text-xs p-1 overflow-hidden shadow-sm cursor-pointer border border-white/40 pointer-events-auto flex ${isW?'flex-row items-start gap-1':'flex-col justify-start'} ${cls}`} style={{left:`${left}%`,width:`${width}%`,top:`${it}px`,bottom:'2px',minWidth:'4px',zIndex:10+li,...style}}>
+                          <div className="text-[13px] font-normal leading-tight break-words whitespace-normal truncate flex-shrink-0 max-w-full">{evt.title||'予定あり'}</div>
+                          <div className={`text-[10px] opacity-90 overflow-hidden whitespace-nowrap min-w-0 ${isW?'mt-[1px]':'mt-0.5'}`}>{getTimeLabel(evt)}</div>
+                        </div>
+                      });
+                    })()}
+                  </div>
+                </div>
+              </>
+            })()}
+            </div>
+          </div>
+        </div>})}
+        <div className="h-32 w-full"></div>
+      </div>
+    </div>
+    <HoverTooltip event={hoverEvent} position={ttPos}/>
+  </div>
+};
+
+/* === SchedulerGrid === */
+const SchedulerGrid=({viewMode,currentDate,resources,onEventClick,onCellClick,myEmail,sharedScrollTop,isVisible,isLoading,sidebarWidth,onSidebarResize,groupId,settings,onResourceClick})=>{
+  const sRef=useRef(null);const tRef=useRef(null);const hRef=useRef(null);const tbRef=useRef(null);
+  const[hoverEvent,setHoverEvent]=useState(null);const[ttPos,setTtPos]=useState(null);
+  const[selectedDayEvents,setSelectedDayEvents]=useState(null);
+  const useMono=settings?.useMonoColor;
+
+  const timeRange=useMemo(()=>{
+    let min=8,max=19;
+    if(isVisible){resources.forEach(r=>(r.events||[]).forEach(e=>{
+      if(!e.isAllDay){
+        const dS=new Date(e.start);if(dS.toDateString()===currentDate.toDateString()){const h=dS.getHours();if(h<min)min=h}
+        const dE=new Date(e.end);if(dE.toDateString()===currentDate.toDateString()){const h=dE.getHours()+(dE.getMinutes()>0?1:0);if(h>max)max=Math.min(24,h)}
+      }
+    }))}
+    return{start:min,end:max}
+  },[currentDate,resources,isVisible]);
+
+  const hasAllDayEvents=useMemo(()=>{
+    if(viewMode!=='day')return false;
+    return resources.some(r=>(r.events||[]).some(e=>e.isAllDay&&new Date(e.start).toDateString()===currentDate.toDateString()));
+  },[resources,currentDate,viewMode]);
+
+  useEffect(()=>{
+    const handleScroll=(e)=>{
+      if(!isVisible)return;const t=e.target;
+      if(t===tbRef.current){if(hRef.current)hRef.current.scrollLeft=t.scrollLeft;if(sRef.current)sRef.current.scrollTop=t.scrollTop;if(sharedScrollTop)sharedScrollTop(t.scrollTop)}
+      else if(t===sRef.current){if(tbRef.current)tbRef.current.scrollTop=t.scrollTop}
+    };
+    const tb=tbRef.current,sb=sRef.current;
+    if(tb)tb.addEventListener('scroll',handleScroll,{passive:true});if(sb)sb.addEventListener('scroll',handleScroll,{passive:true});
+    return()=>{if(tb)tb.removeEventListener('scroll',handleScroll);if(sb)sb.removeEventListener('scroll',handleScroll)}
+  },[isVisible,sharedScrollTop,viewMode]);
+
+  if(!isVisible)return null;
+
+  // ミーティングビューモード
+  const isMeetingView = settings?.groups?.find(g=>g.id===groupId)?.meetingView;
+  if(isMeetingView && (viewMode==='day'||viewMode==='week'||viewMode==='month')){
+    return <MeetingView currentDate={currentDate} resources={resources} onEventClick={onEventClick} myEmail={myEmail} viewMode={viewMode} isLoading={isLoading}/>;
+  }
+
+  if(viewMode==='month')return <MonthView currentDate={currentDate} resources={resources} onEventClick={onEventClick} myEmail={myEmail} groupId={groupId}/>;
+  const isCompactDayView = settings?.groups?.find(g=>g.id===groupId)?.isCompactDayView || false;
+  const effectiveSidebarWidth = window.innerWidth < 768 ? 60 : sidebarWidth;
+  if(viewMode==='day'&&!isCompactDayView)return <V1ClassicDayView currentDate={currentDate} resources={resources} onEventClick={onEventClick} onCellClick={onCellClick} myEmail={myEmail} isLoading={isLoading} sidebarWidth={effectiveSidebarWidth} onSidebarResize={onSidebarResize} settings={settings} timeRange={timeRange} onResourceClick={onResourceClick}/>;
+
+  if(viewMode==='week'){
+    const startDay = settings?.weekStartDay || 0;
+    const dates=Array.from({length:7},(_,i)=>{
+      const d=new Date(currentDate);
+      const currentDay = d.getDay();
+      const diff = currentDay < startDay ? 7 - startDay + currentDay : currentDay - startDay;
+      d.setDate(d.getDate() - diff + i);
+      return d;
+    });
+    return <div className="flex-1 flex flex-col h-full bg-white overflow-hidden relative">
+      {isLoading&&<div className="absolute inset-0 bg-white/50 z-50 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div></div>}
+      <div className="flex-1 flex flex-col overflow-auto custom-scrollbar relative">
+        {/* ヘッダー行 */}
+        <div className="flex border-b bg-gray-50 sticky top-0 z-[60] w-full">
+          <div className="flex-shrink-0 border-r bg-white sticky left-0 z-[60] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] relative" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+            <div className="resizer-handle" onMouseDown={e=>{e.preventDefault();const move=ev=>{const w=ev.clientX;if(w>60&&w<500&&onSidebarResize)onSidebarResize(w)};const up=()=>{window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up)};window.addEventListener('mousemove',move);window.addEventListener('mouseup',up)}}><div className="resizer-bar"></div></div>
+          </div>
+          <div className="flex-1 min-w-0 flex">
+            {dates.map((d,i)=>{
+              const isToday=d.toDateString()===new Date().toDateString();const isPast=d<new Date(new Date().setHours(0,0,0,0));
+              return <div key={i} className={`flex-1 min-w-0 border-r text-center py-2 ${isToday?'bg-blue-50':''} ${isPast?'past-header':''}`}>
+                <div className={`text-xs font-bold ${isToday?'text-blue-600':isPast?'text-gray-400':'text-gray-700'}`}>{d.getDate()} ({['日','月','火','水','木','金','土'][d.getDay()]})</div>
+              </div>
+            })}
+          </div>
+        </div>
+        {/* リソース行 */}
+        <div className="w-full relative flex flex-col">
+          {resources.map((r,rIdx)=>{
+            const isSep = r.id.startsWith('_SEP_');
+            if (isSep) {
+               const label = r.id.split(':').slice(2).join(':') || '';
+               return <div key={r.id} className="flex min-h-[32px] relative bg-gray-100 border-b shadow-inner">
+                 <div className="flex-shrink-0 flex items-center px-3 sticky left-0 z-40 bg-gray-100 border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+                   <span className="text-[11px] font-bold text-gray-500 truncate">{label}</span>
+                 </div>
+               </div>
+            }
+
+            return <div key={r.id} className={`flex border-b min-h-[120px] transition-colors hover:bg-gray-50 ${rIdx%2!==0?'bg-gray-50/30':'bg-white'}`}>
+              <div className="flex-shrink-0 p-2 border-r flex flex-col items-center justify-center truncate sticky left-0 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer hover:bg-gray-100 transition-colors group bg-inherit" style={{width:sidebarWidth,minWidth:sidebarWidth}} onClick={()=>onResourceClick&&onResourceClick(r.id)}>
+                {r.photoUrl?<img src={r.photoUrl} className="w-8 h-8 rounded-full mb-1 object-cover group-hover:opacity-80 transition-opacity"/>:<div className="w-8 h-8 rounded-full text-white flex items-center justify-center text-xs font-bold mb-1 group-hover:opacity-80 transition-opacity" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):r.color||'#4285F4'}}>{r.name?r.name.slice(0,2).toUpperCase():'?'}</div>}
+                <div className="font-bold text-[11px] text-gray-800 truncate w-full text-center" title={r.name}>{r.name}</div>
+                <div className="text-[9px] text-gray-400 truncate w-full text-center">{r.id}</div>
+              </div>
+              <div className="flex-1 flex min-w-0 bg-transparent">
+                {dates.map((d,cIdx)=>{
+                  const dStart=new Date(d); dStart.setHours(0,0,0,0);
+                  const dEnd=new Date(d); dEnd.setHours(23,59,59,999);
+                  const dayEvents=(r.events||[]).filter(e=>{
+                     const s=new Date(e.start), ed=new Date(e.end);
+                     if(e.isAllDay)return d.toDateString()===s.toDateString();
+                     return s<dEnd&&ed>dStart;
+                  }).sort((a,b)=>new Date(a.start)-new Date(b.start));
+
+                  return <div key={cIdx} className="flex-1 min-w-0 border-r p-1 flex flex-col space-y-1 hover:bg-black/5 cursor-pointer" onClick={()=>onCellClick(r.id,new Date(d.getFullYear(),d.getMonth(),d.getDate(),9).toISOString())}>
+                    {dayEvents.map((evt,eIdx)=>{
+                       const st=new Date(evt.start);
+                       const timeStr=evt.isAllDay?'':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')}`;
+                       const isFacility = evt.resourceEmail && (evt.resourceEmail.includes('resource.calendar.google.com') || evt.resourceEmail.includes('group.calendar.google.com'));
+                       return <div key={evt.id+'_'+eIdx} onClick={(e)=>{e.stopPropagation();onEventClick(evt)}} className="text-[10px] p-1 rounded cursor-pointer hover:opacity-80 text-white shadow-sm flex items-center gap-1 border border-black/10 overflow-hidden flex-shrink-0" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4'}} title={evt.title}>
+                         {timeStr&&<div className="opacity-90 font-bold flex-shrink-0">{timeStr}</div>}
+                         <div className="font-bold truncate leading-tight flex-1">{evt.title||'予定あり'}</div>
+                         {evt.resourcePhotoUrl ? <img src={evt.resourcePhotoUrl} className="w-3 h-3 rounded-full ml-1 flex-shrink-0 object-cover"/> : 
+                         (evt.resourceName && <div className="w-3 h-3 rounded-full bg-white/30 flex items-center justify-center text-[7px] font-bold ml-1 flex-shrink-0">
+                           {isFacility ? <Icon name="building" size={6}/> : evt.resourceName.slice(0,1)}
+                         </div>)}
+                       </div>
+                    })}
+                  </div>
+                })}
+              </div>
+            </div>
+          })}
+        </div>
+      </div>
+      <HoverTooltip event={hoverEvent} position={ttPos}/>
+    </div>
+  }
+
+  const dates=[currentDate];
+  const hours=Array.from({length:timeRange.end-timeRange.start},(_,i)=>i+timeRange.start);
+  const totalCols=dates.length;const defaultRowHeight=40;
+
+  const rowOffsets = [];
+  let currentY = 0;
+  resources.forEach(r => {
+    rowOffsets.push(currentY);
+    currentY += r.id.startsWith('_SEP_') ? 24 : defaultRowHeight;
+  });
+  const totalHeight = currentY;
+
+  return <div className="flex-1 flex flex-col h-full bg-white overflow-hidden relative">
+    {isLoading&&<div className="absolute inset-0 bg-white/50 z-50 flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full"></div></div>}
+    
+    <div className="flex-1 flex flex-col overflow-auto custom-scrollbar relative" ref={tbRef}>
+      {/* ヘッダー行 */}
+      <div className="flex flex-shrink-0 border-b bg-gray-50 sticky top-0 z-[60] min-w-max w-full">
+        <div className="flex-shrink-0 border-r bg-gray-100 sticky left-0 z-[60] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] relative" style={{width:sidebarWidth,minWidth:sidebarWidth}}>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+            <div className="flex items-end gap-1">
+              <span className="text-2xl font-bold text-gray-500 leading-none">{currentDate.getDate()}</span>
+              <span className="text-xs font-bold text-gray-400 mb-0.5">{currentDate.toLocaleDateString('ja-JP',{weekday:'short'}).replace(/[()（）]/g,'')}</span>
+            </div>
+          </div>
+          <div className="resizer-handle" onMouseDown={e=>{e.preventDefault();const move=ev=>{const w=ev.clientX;if(w>60&&w<500&&onSidebarResize)onSidebarResize(w)};const up=()=>{window.removeEventListener('mousemove',move);window.removeEventListener('mouseup',up)};window.addEventListener('mousemove',move);window.addEventListener('mouseup',up)}}><div className="resizer-bar"></div></div>
+        </div>
+        <div className="flex-1 min-w-[600px] flex relative">
+          {hasAllDayEvents&&<div className="w-16 flex-shrink-0 border-r bg-gray-100 flex-none flex items-center justify-center md:sticky md:z-[50] md:shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]" style={{left:sidebarWidth}}><span className="text-[10px] text-gray-500 font-bold">終日</span></div>}
+          <div className="flex-1 flex relative">
+            {hours.map(h=><div key={h} className="flex-1 min-w-0 border-r py-2 text-center text-sm text-gray-500 relative overflow-hidden">{h}<span className="hidden md:inline">:00</span></div>)}
+          </div>
+        </div>
+      </div>
+
+      {/* 本体行 */}
+      <div className="flex flex-shrink-0 min-w-max relative w-full" style={{height:totalHeight}}>
+        {/* 左サイドバー (Sticky left-0) */}
+        <div style={{width:sidebarWidth}} className="border-r bg-gray-50 sticky left-0 z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] h-full">
+          <div className="relative w-full h-full">
+            {resources.map((r,rIdx)=>{
+              const isSep = r.id.startsWith('_SEP_');
+              const h = isSep ? 24 : defaultRowHeight;
+              const y = rowOffsets[rIdx];
+              if (isSep) {
+                 const label = r.id.split(':').slice(2).join(':') || '';
+                 return <div key={r.id} className="absolute w-full flex items-center px-2 border-b bg-gray-100 shadow-inner" style={{top:y,height:h}}>
+                   <span className="text-[11px] font-bold text-gray-500 truncate">{label}</span>
+                 </div>;
+              }
+              return <div key={r.id} className={`absolute w-full border-b px-2 flex flex-col justify-center truncate group cursor-pointer hover:bg-gray-100 transition-colors ${rIdx%2!==0?'bg-gray-50/30':'bg-white'}`} style={{top:y,height:h}} onClick={()=>onResourceClick&&onResourceClick(r.id)} title={`${r.name}\n${r.id}`}>
+                <div className="flex items-center gap-1.5 truncate">
+                  {r.photoUrl?<img src={r.photoUrl} className="w-5 h-5 rounded-full object-cover flex-shrink-0"/>:<div className="w-5 h-5 rounded-full text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):r.color||'#4285F4'}}>{r.name?r.name.slice(0,1).toUpperCase():'?'}</div>}
+                  <div className="font-bold text-[11px] text-gray-800 truncate">{r.name}</div>
+                </div>
+              </div>
+            })}
+          </div>
+        </div>
+
+        {/* グリッド本体 */}
+        <div className="flex-1 min-w-[600px] flex relative bg-white">
+          {/* 終日予定カラム (PC: Sticky) */}
+          {hasAllDayEvents && <div className="w-16 flex-shrink-0 border-r bg-gray-50 md:sticky md:z-30 md:shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] h-full" style={{left:sidebarWidth}}>
+            <div className="relative w-full h-full">
+              {resources.map((r,rIdx)=>{
+                  const isSep = r.id.startsWith('_SEP_');
+                  const h = isSep ? 24 : defaultRowHeight;
+                  const y = rowOffsets[rIdx];
+                  if (isSep) return <div key={r.id} className="absolute w-full border-b bg-gray-100" style={{top:y,height:h}}></div>;
+                  const allDayEvents = (r.events||[]).filter(e=>e.isAllDay && new Date(e.start).toDateString()===dates[0].toDateString());
+                  return <div key={r.id} className="absolute w-full border-b flex flex-col p-1 gap-1 overflow-hidden" style={{top:y,height:h}}>
+                      {allDayEvents.slice(0,2).map((evt,eIdx)=><div key={evt.id} className="w-full rounded text-[9px] px-1 truncate cursor-pointer shadow-sm border border-black/10 flex-shrink-0 hover:opacity-90" style={{backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4',color:'#fff'}} title={evt.title} onClick={()=>onEventClick(evt)} onMouseEnter={ev=>{setHoverEvent(evt);setTtPos({x:ev.clientX,y:ev.clientY})}} onMouseLeave={()=>setHoverEvent(null)}>{evt.title||'終日予定'}</div>)}
+                      {allDayEvents.length > 2 && (
+                         <div onClick={(ev)=>{ev.stopPropagation();setSelectedDayEvents(allDayEvents)}} className="text-[9px] text-gray-500 font-bold hover:bg-gray-200 cursor-pointer rounded text-center mt-auto flex-shrink-0 truncate w-full">
+                           +他{allDayEvents.length - 2}件
+                         </div>
+                      )}
+                  </div>
+              })}
+            </div>
+          </div>}
+
+          <div className="flex-1 relative">
+            {/* 背景グリッドと時間線 */}
+            <div className="absolute inset-0 pointer-events-none z-0 flex">
+              {dates.map((_,i)=><div key={i} className="flex-1 min-w-0 border-r relative">
+                {hours.map((h,j)=><div key={j} className="absolute border-l border-gray-100 h-full" style={{left:`${(j/hours.length)*100}%`}}></div>)}
+              </div>)}
+            </div>
+            {/* 横線 (区切り線等) - w-fullだと途切れるためleft-0 right-0 */}
+            <div className="absolute inset-0 pointer-events-none z-0">
+              {resources.map((r,i)=>{
+                 const nextY = rowOffsets[i] + (r.id.startsWith('_SEP_') ? 24 : defaultRowHeight);
+                 return <div key={i} className="absolute left-0 right-0 border-b border-gray-100" style={{top:nextY}}></div>;
+              })}
+            </div>
+            
+            {/* セルクリック領域 */}
+            {resources.map((r,rIdx)=>{
+              const isSep = r.id.startsWith('_SEP_');
+              const y = rowOffsets[rIdx];
+              const h = isSep ? 24 : defaultRowHeight;
+              return <div key={r.id} className={`absolute left-0 right-0 flex ${isSep?'pointer-events-none bg-gray-100 border-b shadow-inner':(rIdx%2!==0?'bg-gray-50/30':'bg-transparent')}`} style={{top:y,height:h,zIndex:5}}>
+                {isSep ? null :
+                dates.map((d,cIdx)=><div key={cIdx} className="flex-1 min-w-0 relative flex">
+                  {hours.map((h,hIdx)=><div key={hIdx} className="flex-1 h-full cursor-crosshair grid-cell" onClick={()=>onCellClick(r.id,new Date(d.getFullYear(),d.getMonth(),d.getDate(),h).toISOString())}></div>)}
+                </div>)}
+              </div>
+            })}
+            {/* イベント描画 */}
+            {resources.map((r,rIdx)=>{
+              const dayStr = dates[0].toDateString();
+              const timeEvents = (r.events||[]).filter(e=>!e.isAllDay && new Date(e.start).toDateString()===dayStr)
+                .sort((a,b)=>new Date(a.start)-new Date(b.start));
+              
+              let maxEnd = 0;
+
+              return <React.Fragment key={r.id}>
+                {timeEvents.map((evt,eIdx)=>{
+                  const s=new Date(evt.start),e=new Date(evt.end);
+                  const sMin=(s.getHours()-timeRange.start)*60+s.getMinutes();const eMin=(e.getHours()-timeRange.start)*60+e.getMinutes();
+                  if(eMin<=0||sMin>=(hours.length*60))return null;
+                  const ds=Math.max(0,sMin),de=Math.min(hours.length*60,eMin);
+                  const left=(ds/(hours.length*60))*100,width=((de-ds)/(hours.length*60))*100;
+
+                  const startMs = s.getTime();
+                  const endMs = e.getTime();
+                  const isOverlap = startMs < maxEnd;
+                  if (endMs > maxEnd) maxEnd = endMs;
+
+                  const topOffset = isOverlap ? 20 : 2;
+                  const h = isOverlap ? 18 : (defaultRowHeight-4);
+                  const timeStr = `${s.getHours()}:${String(s.getMinutes()).padStart(2,'0')} - ${e.getHours()}:${String(e.getMinutes()).padStart(2,'0')}`;
+
+                  return <div key={evt.id+'_'+eIdx} className={`absolute rounded-sm px-1 overflow-hidden cursor-pointer hover:opacity-90 shadow-sm border-[1.5px] border-white/90 flex ${isOverlap ? 'flex-row items-center gap-1' : 'flex-col justify-start pt-0.5'}`} style={{top:rowOffsets[rIdx]+topOffset,height:h,left:`calc(${left/totalCols}%)`,width:`calc(${width/totalCols}% - 2px)`,backgroundColor:useMono&&r.id!==myEmail?adjustColorHsl(r.color):evt.color||r.color||'#4285F4',color:'#fff',zIndex:isOverlap?21:20}} onClick={()=>onEventClick(evt)} onMouseEnter={ev=>{setHoverEvent(evt);setTtPos({x:ev.clientX,y:ev.clientY})}} onMouseLeave={()=>setHoverEvent(null)}>
+                    <div className={`truncate ${isOverlap?'text-[9px] font-medium flex-shrink-0 max-w-full':'text-[10px] font-bold leading-none w-full'}`}>{evt.title||'予定あり'}</div>
+                    <div className={`truncate opacity-90 ${isOverlap?'text-[8px] min-w-0':'text-[8px] leading-none mt-[2px] w-full'}`}>{timeStr}</div>
+                  </div>
+                })}
+              </React.Fragment>
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+    <HoverTooltip event={hoverEvent} position={ttPos}/>
+    <DayDetailsModal isOpen={!!selectedDayEvents} date={currentDate} events={selectedDayEvents || []} onClose={()=>setSelectedDayEvents(null)} onEventClick={onEventClick} myEmail={myEmail}/>
+  </div>
+};
+
+/* === PersonalPanel === */
+const PersonalPanel=({isOpen,onClose,myEmail,resourcesMap,onEventClick})=>{
+  const[panelDate,setPanelDate]=useState(new Date());
+  
+  useEffect(()=>{
+    if(isOpen) setPanelDate(new Date());
+  },[isOpen]);
+
+  if(!isOpen)return null;
+  const me=resourcesMap[myEmail]||{events:[]};
+  const today = panelDate;
+  const todayEvents=(me.events||[]).filter(e=>{
+    const s=new Date(e.start),ed=new Date(e.end);
+    if(e.isAllDay)return today.toDateString()===s.toDateString();
+    s.setHours(0,0,0,0);ed.setHours(23,59,59,999);
+    return today>=s&&today<=ed;
+  }).sort((a,b)=>new Date(a.start)-new Date(b.start));
+
+  const changeDate=(days)=>{
+    const d=new Date(panelDate);
+    d.setDate(d.getDate()+days);
+    setPanelDate(d);
+  };
+  const isActuallyToday = panelDate.toDateString() === new Date().toDateString();
+
+  return <>
+    <div className="md:hidden fixed inset-0 bg-black/50 z-[2000]" onClick={onClose}></div>
+    <div className="w-[90%] max-w-sm max-h-[80vh] rounded-lg fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2010] md:static md:translate-x-0 md:translate-y-0 md:w-80 md:max-h-none md:rounded-none md:z-auto bg-white flex flex-col md:border-l flex-shrink-0 shadow-xl md:shadow-[-2px_0_8px_rgba(0,0,0,0.06)] overflow-hidden">
+    <div className="p-3 border-b bg-gray-50 flex justify-between items-center">
+      <h3 className="font-bold flex items-center gap-1.5 text-gray-800 text-sm">
+        <Icon name="user" size={16}/>
+        {isActuallyToday ? `本日の予定 (${today.getDate()}日)` : `${today.getMonth()+1}月${today.getDate()}日の予定`}
+      </h3>
+      <div className="flex items-center">
+        <button onClick={()=>changeDate(-1)} className="p-1 hover:bg-gray-200 rounded" title="前日"><Icon name="chevron-left" size={14}/></button>
+        <button onClick={()=>setPanelDate(new Date())} className="px-1.5 py-0.5 text-[10px] font-bold hover:bg-gray-200 rounded text-gray-600">今日</button>
+        <button onClick={()=>changeDate(1)} className="p-1 hover:bg-gray-200 rounded" title="翌日"><Icon name="chevron-right" size={14}/></button>
+        <div className="w-px h-4 bg-gray-300 mx-1"></div>
+        <button onClick={onClose} className="p-1.5 hover:bg-gray-200 rounded-full text-gray-500" title="閉じる"><Icon name="x" size={14}/></button>
+      </div>
+    </div>
+    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-3">
+      {todayEvents.length===0?<p className="text-gray-500 text-sm text-center mt-4">予定はありません</p>:
+        todayEvents.map((e,i)=>{
+          const st=new Date(e.start),ed=new Date(e.end);
+          const timeStr=e.isAllDay?'終日':`${st.getHours()}:${String(st.getMinutes()).padStart(2,'0')} - ${ed.getHours()}:${String(ed.getMinutes()).padStart(2,'0')}`;
+          const c = typeof adjustColorHsl === 'function' ? adjustColorHsl(e.color) : (e.color||'#4285F4');
+          return <div key={i} onClick={()=>onEventClick(e)} className="p-3 border rounded-lg cursor-pointer hover:shadow-md transition-shadow border-l-4" style={{borderLeftColor:c, backgroundColor: c + '1A'}}>
+            <div className="text-xs text-gray-600 font-bold mb-1 flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full" style={{backgroundColor:c}}></div>
+              {timeStr}
+            </div>
+            <div className="text-sm font-bold text-gray-900 break-words leading-tight">{e.title||'(タイトルなし)'}</div>
+          </div>
+        })
+      }
+    </div>
+    </div>
+  </>
+};
+
+/* === App === */
+const App=()=>{
+  const{showAlert,showConfirm,showPrompt}=useAlert()||{};
+  const[currentDate,setCurrentDate]=useState(new Date());
+  const[viewMode,setViewMode]=useIndexedDBState('viewMode',window.INITIAL_VIEW_MODE||'day');
+  const[settings,setSettings]=useState(null);
+  const[resourcesMap,setResourcesMap]=useState({});
+  const[isLoading,setIsLoading]=useState(true);
+  const[isBackgroundUpdating,setIsBackgroundUpdating]=useState(false);
+  const[myEmail,setMyEmail]=useState('');
+  const[isDatePickerOpen,setIsDatePickerOpen]=useState(false);
+  const[isSettingsOpen,setIsSettingsOpen]=useState(false);
+  const[isPersonalOpen,setIsPersonalOpen]=useState(false);
+  const[settingsFocus,setSettingsFocus]=useState(null);
+  const[settingsGroupId,setSettingsGroupId]=useState(null);
+  const[selectedEvent,setSelectedEvent]=useState(null);
+  const[editingEvent,setEditingEvent]=useState(null);
+  const[isCreateModalOpen,setIsCreateModalOpen]=useState(false);
+  const[createDefaultStart,setCreateDefaultStart]=useState(null);
+  const[createInitialGuest,setCreateInitialGuest]=useState(null);
+  const[sidebarWidth,setSidebarWidth]=useIndexedDBState('sidebarWidth3',250);
+  const[webAppUrl,setWebAppUrl]=useState('');
+  const[contextMenu,setContextMenu]=useState({visible:false,x:0,y:0,groupId:null});
+  const[detailsModalResourceId,setDetailsModalResourceId]=useState(null);
+  const[isQuickSearchOpen,setIsQuickSearchOpen]=useState(false);
+  const[quickSearchInitialUser,setQuickSearchInitialUser]=useState(null);
+  const[resourceCals,setResourceCals]=useState([]);
+  const[isTeamStatusOpen,setIsTeamStatusOpen]=useIndexedDBState('teamStatusOpen', window.innerWidth >= 768);
+  const[isMobileWindow,setIsMobileWindow]=useState(window.innerWidth < 768);
+  const[isMobileMenuOpen,setIsMobileMenuOpen]=useState(false);
+
+  useEffect(()=>{
+    const handleResize=()=>setIsMobileWindow(window.innerWidth < 768);
+    window.addEventListener('resize',handleResize);
+    return()=>window.removeEventListener('resize',handleResize);
+  },[]);
+
+  useEffect(()=>{
+    if(window.INITIAL_VIEW_MODE){
+      setViewMode(window.INITIAL_VIEW_MODE);
+    }
+  },[]);
+
+  const effectiveSidebarWidth = isMobileWindow ? 60 : sidebarWidth;
+
+  const fetchData=useCallback((force=false)=>{
+    if(!settings||!settings.groups)return;
+    const activeGroup=settings.groups.find(g=>g.id===settings.activeGroupId);
+    if(!activeGroup||!activeGroup.members||activeGroup.members.length===0){setIsLoading(false);return}
+    
+    let s=new Date(currentDate),e=new Date(currentDate);
+    if(viewMode==='week'){
+      const d=s.getDay();s.setDate(s.getDate()-d);e.setDate(s.getDate()+14); // 表示期間＋7日プリフェッチ
+    }else if(viewMode==='month'){
+      s.setDate(1);e.setMonth(e.getMonth()+1);e.setDate(7); // 次の月の初週もプリフェッチ
+    }else{
+      s.setDate(s.getDate()-1);e.setDate(s.getDate()+8); // 表示日の前後1日＋7日先までプリフェッチ
+    }
+    s.setHours(0,0,0,0);e.setHours(0,0,0,0);
+    
+    // 現在のメンバーのうち、1件でもキャッシュがあれば loader を出さずに即時表示（サクサク化）
+    const hasAnyCache=activeGroup.members.some(m=>resourcesMap[m]);
+    if(hasAnyCache&&!force)setIsBackgroundUpdating(true);
+    else setIsLoading(true);
+
+    const fetchStartTime=s.getTime(),fetchEndTime=e.getTime();
+
+    google.script.run.withSuccessHandler(data=>{
+      const parsed=JSON.parse(data);
+      setResourcesMap(prev=>{
+        const next={...prev};
+        // 参加者の名前をリソースMapとIndexedDBキャッシュから解決するヘルパー
+        const resolveName=(email,fallback)=>{
+          if(!email)return fallback;
+          if(next[email]&&next[email].name&&!next[email].name.includes('@'))return next[email].name;
+          return fallback;
+        };
+        parsed.forEach(newR=>{
+          // イベント内の参加者名を解決
+          (newR.events||[]).forEach(ev=>{
+            (ev.guests||[]).forEach(g=>{
+              const resolved=resolveName(g.email,g.name);
+              if(resolved&&resolved!==g.email)g.name=resolved;
+            });
+            (ev.creators||[]).forEach(c=>{
+              const resolved=resolveName(c.email,c.name);
+              if(resolved&&resolved!==c.email)c.name=resolved;
+            });
+          });
+          // IndexedDBにキャッシュを保存 (イベント以外の基本情報のみ。既存の施設情報などを上書きしないようにマージ)
+          idbKV.get(newR.id, 'resources').then(existing => {
+            const merged = {
+              id: newR.id,
+              name: newR.name,
+              email: newR.id,
+              photoUrl: newR.photoUrl,
+              color: newR.color,
+              isResource: (existing && existing.isResource !== undefined) ? existing.isResource : ((newR.id||'').includes('resource.calendar.google.com') || (newR.id||'').includes('group.calendar.google.com')),
+              type: existing?.type,
+              capacity: existing?.capacity,
+              description: existing?.description
+            };
+            idbKV.set(newR.id, merged, 'resources').catch(()=>{});
+          }).catch(()=>{});
+          if(next[newR.id]){
+            const keptEvents=(next[newR.id].events||[]).filter(ev=>{
+              const eStart=new Date(ev.start).getTime(),eEnd=new Date(ev.end).getTime();
+              return !(eStart<fetchEndTime&&eEnd>fetchStartTime);
+            });
+            const eventMap=new Map(keptEvents.map(ev=>[ev.id+'_'+ev.start,ev]));
+            (newR.events||[]).forEach(ev=>eventMap.set(ev.id+'_'+ev.start,ev));
+            next[newR.id]={...next[newR.id],...newR,events:Array.from(eventMap.values())};
+          }else{
+            next[newR.id]=newR;
+          }
+        });
+        return next;
+      });
+      setIsLoading(false);setIsBackgroundUpdating(false);
+      // IndexedDBに現在のデータを保存（次回起動時の高速化）
+      setResourcesMap(latest => { idbKV.set('lastResourcesMap', latest).catch(()=>{}); return latest; });
+    }).withFailureHandler(err=>{
+      console.error(err);setIsLoading(false);setIsBackgroundUpdating(false);
+    }).getCalendarEvents(s.toISOString(),e.toISOString(),activeGroup.members,force);
+  },[currentDate,viewMode,settings]); // resourcesMapはprevで参照するため依存から除外できるが、UI的に不要。
+
+  useEffect(()=>{
+    google.script.run.withSuccessHandler(em=>setMyEmail(em)).getCurrentUserEmail();
+    google.script.run.withSuccessHandler(url=>setWebAppUrl(url)).getWebAppUrl();
+    
+    // バックグラウンドで施設リソース情報を取得し、IndexedDBにキャッシュ
+    google.script.run.withSuccessHandler(d=>{
+      try {
+        const cals = JSON.parse(d);
+        setResourceCals(cals);
+        cals.forEach(c => idbKV.set(c.id, c, 'resources'));
+      } catch(e) {}
+    }).getResourceCalendars();
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlGroup = urlParams.get('group');
+
+    google.script.run.withSuccessHandler(data=>{
+      const s=JSON.parse(data);
+      idbKV.get('activeGroupId').then(localGid => {
+        if(urlGroup && s.groups.find(g=>g.id===urlGroup)) s.activeGroupId=urlGroup;
+        else if(window.INITIAL_GROUP_ID&&s.groups.find(g=>g.id===window.INITIAL_GROUP_ID))s.activeGroupId=window.INITIAL_GROUP_ID;
+        else if(localGid && s.groups.find(g=>g.id===localGid)) s.activeGroupId=localGid;
+        
+        setSettings(s);
+
+        const allMembers = new Set();
+      s.groups.forEach(g => g.members.forEach(m => {
+        if(m.includes('@') && !m.includes('group.calendar.google.com') && !m.includes('resource.calendar.google.com')) {
+          allMembers.add(m);
+        }
+      }));
+      const emails = Array.from(allMembers);
+      if (emails.length > 0) {
+        Promise.all(emails.map(em => idbKV.get(`user_${em}`))).then(cachedUsers => {
+          const toFetch = [];
+          const loadedProfiles = {};
+          
+          emails.forEach((em, i) => {
+            if (cachedUsers[i]) {
+               loadedProfiles[em] = cachedUsers[i];
+            } else {
+               toFetch.push(em);
+            }
+          });
+          
+          if (Object.keys(loadedProfiles).length > 0) {
+             setResourcesMap(prev => {
+                const next = {...prev};
+                Object.keys(loadedProfiles).forEach(em => {
+                   next[em] = { ...next[em], id: em, name: loadedProfiles[em].name, email: em, photoUrl: loadedProfiles[em].photoUrl };
+                });
+                return next;
+             });
+          }
+          
+          if (toFetch.length > 0) {
+            setIsBackgroundUpdating(true); // 右上のローディングを回す
+            google.script.run.withSuccessHandler(profilesStr => {
+               try {
+                 const profiles = JSON.parse(profilesStr);
+                 setResourcesMap(prev => {
+                    const next = {...prev};
+                    Object.keys(profiles).forEach(em => {
+                       const pf = { name: profiles[em].name, photoUrl: profiles[em].photoUrl };
+                       idbKV.set(`user_${em}`, pf);
+                       next[em] = { ...next[em], id: em, name: pf.name, email: em, photoUrl: pf.photoUrl };
+                    });
+                    return next;
+                 });
+               } catch(e){}
+               setIsBackgroundUpdating(false);
+            }).getUserProfiles(toFetch);
+          }
+        });
+      }
+      });  // idbKV.get('activeGroupId').then() の閉じ
+    }).loadSettings();
+    // IndexedDBから前回のデータを復元（起動高速化）
+    idbKV.get('lastResourcesMap').then(cached => {
+      if(cached && Object.keys(cached).length > 0) {
+        setResourcesMap(cached);
+        setIsLoading(false);
+      }
+    }).catch(()=>{});
+    const l=document.getElementById('initial-loader');const r=document.getElementById('root');if(l){l.style.opacity='0';setTimeout(()=>{l.remove();if(r)r.style.opacity='1'},300)}
+  },[]);
+
+  useEffect(()=>{if(settings)fetchData(false)},[currentDate,viewMode,settings]); // forceFetch無しならキャッシュを使って即時描画
+
+  // コンテキストメニューを閉じる処理
+  const closeContextMenu=()=>setContextMenu({...contextMenu,visible:false});
+  useEffect(()=>{
+    const handleGlobalClick=()=>closeContextMenu();
+    window.addEventListener('click',handleGlobalClick);
+    return ()=>window.removeEventListener('click',handleGlobalClick);
+  },[contextMenu]);
+
+  // グループのリンクをコピーする
+  const handleCopyLink=(groupId)=>{
+    const fullUrl=`${webAppUrl}?group=${groupId}&view=${viewMode}`;
+    navigator.clipboard.writeText(fullUrl).then(()=>{
+      if(showAlert) showAlert('グループへのリンクをコピーしました');
+    }).catch(err=>{
+      console.error('Copy failed', err);
+      if(showAlert) showAlert('コピーに失敗しました');
+    });
+  };
+
+  const handleTabContextMenu=(e,groupId)=>{
+    e.preventDefault();
+    setContextMenu({visible:true,x:e.clientX,y:e.clientY,groupId});
+  };
+
+  // キーボードナビゲーション
+  useEffect(()=>{
+    const handleKeyDown=e=>{
+      if(isDatePickerOpen||isSettingsOpen||selectedEvent||isCreateModalOpen||editingEvent)return;
+      if(e.key==='ArrowLeft'){
+        setCurrentDate(d=>{const nd=new Date(d);if(viewMode==='week')nd.setDate(nd.getDate()-7);else if(viewMode==='month')nd.setMonth(nd.getMonth()-1);else nd.setDate(nd.getDate()-1);return nd})
+      }else if(e.key==='ArrowRight'){
+        setCurrentDate(d=>{const nd=new Date(d);if(viewMode==='week')nd.setDate(nd.getDate()+7);else if(viewMode==='month')nd.setMonth(nd.getMonth()+1);else nd.setDate(nd.getDate()+1);return nd})
+      }
+    };
+    window.addEventListener('keydown',handleKeyDown);
+    return ()=>window.removeEventListener('keydown',handleKeyDown);
+  },[viewMode,isDatePickerOpen,isSettingsOpen,selectedEvent,isCreateModalOpen,editingEvent]);
+
+  if(!settings)return null;
+  const headerPadding = settings.headerPadding || 0;
+
+  return <div className="flex flex-col h-full bg-white relative" style={{paddingTop: headerPadding}}>
+    {/* コンテキストメニュー */}
+    {contextMenu.visible && <div className="fixed bg-white border shadow-lg rounded z-[9999] py-1 min-w-[180px]" style={{top:contextMenu.y,left:contextMenu.x}} onClick={e=>e.stopPropagation()}>
+      <div className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer flex items-center gap-2" onClick={()=>{closeContextMenu();setSettingsFocus(null);setSettingsGroupId(contextMenu.groupId);setIsSettingsOpen(true)}}><Icon name="edit-2" size={14}/> グループを編集</div>
+      <div className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer flex items-center gap-2" onClick={()=>{closeContextMenu();handleCopyLink(contextMenu.groupId)}}><Icon name="link" size={14}/> リンクをコピー</div>
+      <div className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer flex items-center gap-2" onClick={()=>{
+        closeContextMenu();
+        const srcGroup = settings.groups.find(g=>g.id===contextMenu.groupId);
+        if(srcGroup){
+          const dup = {...JSON.parse(JSON.stringify(srcGroup)), id:'grp_'+Date.now(), name:srcGroup.name+' (コピー)'};
+          const ns = {...settings, groups:[...settings.groups, dup]};
+          setSettings(ns);
+          google.script.run.saveSettings(ns);
+        }
+      }}><Icon name="copy" size={14}/> グループを複製</div>
+      <div className="border-t my-1"></div>
+      <div className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer flex items-center gap-2" onClick={()=>{
+        closeContextMenu();
+        const ns = {...settings, groups: settings.groups.map(g=>g.id===contextMenu.groupId ? {...g, meetingView:!g.meetingView} : g)};
+        setSettings(ns);
+        google.script.run.saveSettings(ns);
+      }}><Icon name="users" size={14}/> {settings.groups.find(g=>g.id===contextMenu.groupId)?.meetingView ? '通常表示に切替' : 'ミーティングビューに切替'}</div>
+      {viewMode==='day'&&<div className="px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer flex items-center gap-2" onClick={()=>{
+        closeContextMenu();
+        const ns = {...settings, groups: settings.groups.map(g=>g.id===contextMenu.groupId ? {...g, isCompactDayView:!g.isCompactDayView} : g)};
+        setSettings(ns);
+        google.script.run.saveSettings(ns);
+      }}><Icon name="layout" size={14}/> {settings.groups.find(g=>g.id===contextMenu.groupId)?.isCompactDayView ? '日表示：通常表示に切替' : '日表示：高密度表示に切替'}</div>}
+    </div>}
+
+    {/* ヘッダー */}
+    <header className="flex flex-col border-b bg-white shadow-sm z-[100] sticky top-0">
+      <div className="flex items-center justify-between p-2 pb-2 md:p-4 md:pb-2">
+        <div className="flex items-center gap-1 md:gap-4">
+          <h1 className="text-xl font-bold text-gray-700 items-center gap-2 hidden md:flex tracking-wider">Group Calendar</h1>
+          <div className="flex items-center bg-gray-100 rounded-lg p-0.5 md:p-1">
+            <button onClick={()=>setViewMode('month')} className={`px-2 md:px-3 py-1 text-xs md:text-sm rounded-md transition-all ${viewMode==='month'?'bg-white shadow text-blue-600 font-medium':'text-gray-500 hover:text-gray-700'}`}>月</button>
+            <button onClick={()=>setViewMode('week')} className={`px-2 md:px-3 py-1 text-xs md:text-sm rounded-md transition-all ${viewMode==='week'?'bg-white shadow text-blue-600 font-medium':'text-gray-500 hover:text-gray-700'}`}>週</button>
+            <button onClick={()=>setViewMode('day')} className={`px-2 md:px-3 py-1 text-xs md:text-sm rounded-md transition-all ${viewMode==='day'?'bg-white shadow text-blue-600 font-medium':'text-gray-500 hover:text-gray-700'}`}>日</button>
+          </div>
+          <div className="hidden md:block"><DigitalClock/></div>
+          <button onClick={!isBackgroundUpdating?()=>fetchData(true):undefined} className={`hidden md:flex p-2 rounded-full transition-colors items-center justify-center w-10 h-10 ${isBackgroundUpdating?'text-blue-600 bg-blue-50 cursor-default':'text-gray-500 hover:bg-blue-50 hover:text-blue-600 cursor-pointer'}`}>
+            <div className={`flex items-center justify-center w-full h-full ${isBackgroundUpdating?'animate-spin origin-center':''}`}><Icon name="refresh-cw"/></div>
+          </button>
+          <button onClick={()=>setIsQuickSearchOpen(true)} className="p-1.5 md:p-2 rounded-full text-gray-500 hover:bg-blue-50 hover:text-blue-600 transition-colors flex items-center justify-center w-8 h-8 md:w-10 md:h-10" title="検索">
+            <Icon name="search" size={18}/>
+          </button>
+        </div>
+        <div className="flex items-center gap-1 md:gap-4">
+          <div className="relative group cursor-pointer text-center" onClick={()=>setIsDatePickerOpen(true)}>
+            <span className="text-lg font-semibold w-auto md:w-48 block text-gray-700 group-hover:text-blue-600 transition-colors hidden md:block">{currentDate.toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'short'})}</span>
+            <span className="text-sm font-semibold block text-gray-700 group-hover:text-blue-600 transition-colors md:hidden">{currentDate.toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'}).replace(/[()（）]/g,'')}</span>
+          </div>
+          <div className="flex items-center space-x-1 md:space-x-2 border-r pr-1 mr-1 md:pr-4 md:mr-2">
+            <button onClick={()=>setCurrentDate(d=>{const nd=new Date(d);if(viewMode==='week')nd.setDate(nd.getDate()-7);else if(viewMode==='month')nd.setMonth(nd.getMonth()-1);else nd.setDate(nd.getDate()-1);return nd})} className="p-1 md:p-2 hover:bg-gray-100 rounded-full"><Icon name="chevron-left" size={18}/></button>
+            <button onClick={()=>setCurrentDate(new Date())} className="px-2 md:px-3 py-1 text-xs md:text-sm border rounded hover:bg-gray-50 whitespace-nowrap">今日</button>
+            <button onClick={()=>setCurrentDate(d=>{const nd=new Date(d);if(viewMode==='week')nd.setDate(nd.getDate()+7);else if(viewMode==='month')nd.setMonth(nd.getMonth()+1);else nd.setDate(nd.getDate()+1);return nd})} className="p-1 md:p-2 hover:bg-gray-100 rounded-full"><Icon name="chevron-right" size={18}/></button>
+          </div>
+          <button onClick={()=>setIsPersonalOpen(!isPersonalOpen)} className={`hidden md:flex p-2 rounded-full flex-shrink-0 transition-colors mr-1 ${isPersonalOpen?'bg-blue-100 text-blue-600':'text-gray-500 hover:bg-gray-100'}`} title="マイ予定"><Icon name="user"/></button>
+          <button onClick={()=>{setSettingsFocus(null);setIsSettingsOpen(true)}} className="hidden md:flex p-2 text-gray-500 hover:bg-gray-100 rounded-full flex-shrink-0"><Icon name="settings"/></button>
+          
+          {/* モバイル用ハンバーガーメニュー */}
+          <div className="relative md:hidden">
+            <button onClick={()=>setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-1.5 text-gray-500 hover:bg-gray-100 rounded-full flex-shrink-0">
+              <Icon name="menu" size={20}/>
+            </button>
+            {isMobileMenuOpen && (
+              <React.Fragment>
+                <div className="fixed inset-0 z-[9000]" onClick={() => setIsMobileMenuOpen(false)}></div>
+                <div className="fixed right-2 top-14 bg-white border shadow-xl rounded-lg z-[9001] py-1 min-w-[160px]">
+                  <button className="w-full text-left px-4 py-3 text-sm flex items-center gap-3 text-gray-700 hover:bg-gray-50 border-b" onClick={()=>{setIsMobileMenuOpen(false); fetchData(true);}}>
+                    <div className={`${isBackgroundUpdating?'animate-spin origin-center':''}`}><Icon name="refresh-cw" size={16}/></div> 再読み込み
+                  </button>
+                  <button className="w-full text-left px-4 py-3 text-sm flex items-center gap-3 text-gray-700 hover:bg-gray-50 border-b" onClick={()=>{setIsMobileMenuOpen(false); setIsPersonalOpen(!isPersonalOpen);}}>
+                    <Icon name="user" size={16}/> マイ予定
+                  </button>
+                  <button className="w-full text-left px-4 py-3 text-sm flex items-center gap-3 text-gray-700 hover:bg-gray-50 border-b" onClick={()=>{setIsMobileMenuOpen(false); setIsTeamStatusOpen(!isTeamStatusOpen);}}>
+                    <Icon name="users" size={16}/> チームボード
+                  </button>
+                  <button className="w-full text-left px-4 py-3 text-sm flex items-center gap-3 text-gray-700 hover:bg-gray-50" onClick={()=>{setIsMobileMenuOpen(false); setSettingsFocus(null); setIsSettingsOpen(true);}}>
+                    <Icon name="settings" size={16}/> 設定
+                  </button>
+                </div>
+              </React.Fragment>
+            )}
+          </div>
+        </div>
+      </div>
+      {settings.groups.length>0&&<div className="flex items-center px-2 md:px-4 gap-1 border-t pt-1">
+        <div className="flex overflow-x-auto scrollbar-hide gap-1">
+          {settings.groups.map((g,gIdx)=><button key={g.id} draggable
+            onDragStart={e=>{e.dataTransfer.setData('text/plain',gIdx.toString());e.dataTransfer.effectAllowed='move';e.currentTarget.style.opacity='0.5'}}
+            onDragEnd={e=>{e.currentTarget.style.opacity='1'}}
+            onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='move'}}
+            onDrop={e=>{e.preventDefault();const from=parseInt(e.dataTransfer.getData('text/plain'));const to=gIdx;if(from===to||isNaN(from))return;const ng=[...settings.groups];const item=ng.splice(from,1)[0];ng.splice(to,0,item);const ns={...settings,groups:ng};setSettings(ns);google.script.run.saveSettings(ns)}}
+            onContextMenu={e=>handleTabContextMenu(e,g.id)} onClick={()=>{setSettings({...settings,activeGroupId:g.id}); idbKV.set('activeGroupId',g.id).catch(()=>{});}} onDoubleClick={()=>{setSettingsFocus(null);setSettingsGroupId(g.id);setIsSettingsOpen(true)}} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-2 cursor-grab active:cursor-grabbing ${settings.activeGroupId===g.id?'border-b-blue-600 text-blue-600 bg-blue-50/50':'border-b-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
+            {g.meetingView&&<Icon name="users" size={12} className="text-purple-500 flex-shrink-0"/>}
+            {g.name}
+          </button>)}
+        </div>
+        <button onClick={()=>{setSettingsFocus('new_group');setIsSettingsOpen(true)}} className="ml-2 px-3 py-1 text-blue-600 hover:bg-blue-50 rounded font-bold">＋</button>
+      </div>}
+    </header>
+
+    <QuickSearchOverlay 
+      isOpen={isQuickSearchOpen} 
+      onClose={()=>{setIsQuickSearchOpen(false);setQuickSearchInitialUser(null)}} 
+      resourceCals={resourceCals}
+      resourcesMap={resourcesMap}
+      teamMembers={settings?.teamMembers||[]}
+      initialUser={quickSearchInitialUser}
+      onEventClick={setSelectedEvent}
+      groups={settings?.groups||[]}
+      onAddToGroup={(groupId, email)=>{
+        const ng=[...(settings?.groups||[])];
+        const gIdx = ng.findIndex(g=>g.id===groupId);
+        if(gIdx===-1) return;
+        const g = {...ng[gIdx]};
+        g.members = [...g.members];
+        if(!g.members.includes(email)) {
+          g.members.push(email);
+          ng[gIdx] = g;
+          const ns={...settings, groups:ng};
+          setSettings(ns);
+          google.script.run.saveSettings(ns);
+          if(showAlert) showAlert(`「${g.name}」に追加しました`);
+        } else {
+          if(showAlert) showAlert(`すでに「${g.name}」に追加されています`);
+        }
+      }}
+      onAddToTeamBoard={(email)=>{
+        let nm = [...(settings.teamMembers||[])];
+        if(nm.includes(email)) nm = nm.filter(e=>e!==email);
+        else nm.push(email);
+        const ns = {...settings, teamMembers:nm};
+        setSettings(ns);
+        google.script.run.saveSettings(ns);
+      }}
+      initialUser={quickSearchInitialUser}
+    />
+
+    {/* メインエリア */}
+    <div className="flex-1 overflow-hidden flex flex-row">
+      <main className="flex-1 overflow-hidden relative flex flex-col min-w-0">
+        {settings.groups.map(g=>{
+          const isActive=settings.activeGroupId===g.id;
+          const sorted=g.members.map(m=>resourcesMap[m]||{id:m,name:m.split('@')[0],email:m,events:[],color:'#e5e7eb',isLoading:true});
+          return <div key={g.id} className={`flex-1 flex flex-col overflow-hidden h-full w-full ${isActive?'block':'hidden'}`}>
+            <SchedulerGrid viewMode={viewMode} currentDate={currentDate} resources={sorted} onEventClick={setSelectedEvent} onCellClick={(rId,t)=>{setCreateDefaultStart(t);setCreateInitialGuest(rId);setEditingEvent(null);setIsCreateModalOpen(true)}} myEmail={myEmail} isVisible={isActive} isLoading={isLoading&&isActive&&sorted.every(r=>r.isLoading)} sidebarWidth={effectiveSidebarWidth} onSidebarResize={setSidebarWidth} groupId={g.id} settings={settings} onResourceClick={(id)=>{
+              const r = resourcesMap[id];
+              if(r && !id.startsWith('_SEP_')){
+                setQuickSearchInitialUser({email:r.email, name:r.name, photoUrl:r.photoUrl});
+                setIsQuickSearchOpen(true);
+              }
+            }}/>
+          </div>
+        })}
+      </main>
+      <PersonalPanel isOpen={isPersonalOpen} onClose={()=>setIsPersonalOpen(false)} myEmail={myEmail} resourcesMap={resourcesMap} onEventClick={setSelectedEvent} currentDate={currentDate}/>
+    </div>
+
+    {/* チームステータスバー */}
+    <TeamStatusBar teamMembers={settings.teamMembers} isOpen={isTeamStatusOpen} onToggle={()=>setIsTeamStatusOpen(p=>!p)}
+      onReorder={(from,to)=>{
+        const nm = [...(settings.teamMembers||[])];
+        const item = nm.splice(from,1)[0];
+        nm.splice(to,0,item);
+        const ns = {...settings, teamMembers:nm};
+        setSettings(ns);
+        google.script.run.saveSettings(ns);
+      }}
+      onUserClick={(user)=>{
+        setQuickSearchInitialUser({email:user.email, name:user.name, photoUrl:user.photoUrl});
+        setIsQuickSearchOpen(true);
+      }}
+    />
+
+    {/* モーダル群 */}
+    <DatePickerModal isOpen={isDatePickerOpen} onClose={()=>setIsDatePickerOpen(false)} currentDate={currentDate} onSelectDate={setCurrentDate}/>
+    <SettingsModal isOpen={isSettingsOpen} onClose={()=>setIsSettingsOpen(false)} settings={settings} onSaveSettings={s=>{setSettings(s);setResourcesMap({});setIsLoading(true)}} myEmail={myEmail} resources={[]} initialFocus={settingsFocus} initialGroupId={settingsGroupId} webAppUrl="" onOpenDetails={setDetailsModalResourceId}/>
+    <EventDetailModal event={selectedEvent} onClose={()=>setSelectedEvent(null)} myEmail={myEmail} onEdit={e=>{setSelectedEvent(null);setEditingEvent(e);setCreateDefaultStart(null);setIsCreateModalOpen(true)}} onDelete={e=>{if(confirm('削除しますか？')){setSelectedEvent(null);setIsBackgroundUpdating(true);google.script.run.withSuccessHandler(()=>fetchData(true)).withFailureHandler(err=>{alert(err);setIsBackgroundUpdating(false)}).deleteEvent(myEmail,e.id)}}}/>
+    <CreateEventModal isOpen={isCreateModalOpen} onClose={()=>setIsCreateModalOpen(false)} defaultStart={createDefaultStart} defaultCalendarId={myEmail} initialGuest={createInitialGuest} editingEvent={editingEvent} onSave={()=>fetchData(true)} groupMembers={settings.groups.find(g=>g.id===settings.activeGroupId)?.members.map(m=>({email:m,name:resourcesMap[m]?.name||m.split('@')[0]}))||[]} resources={Object.values(resourcesMap)} isWorkspaceUser={settings.isWorkspaceUser}/>
+    <ResourceDetailsModal isOpen={!!detailsModalResourceId} onClose={()=>setDetailsModalResourceId(null)} resourceId={detailsModalResourceId}/>
+
+
+  </div>
+};
+
+
+
+
+const root=ReactDOM.createRoot(document.getElementById('root'));
+root.render(<AlertProvider><App/></AlertProvider>);
+</script>
+</body>
+</html>
